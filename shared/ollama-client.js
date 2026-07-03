@@ -33,6 +33,16 @@ export async function askOllama(prompt, cfg) {
     });
 
     if (!response.ok) {
+      // 403 = Ollama CORS block. Chrome extension origins are blocked by default.
+      // Fix: set OLLAMA_ORIGINS=* before starting ollama serve.
+      if (response.status === 403) {
+        throw new OllamaError(
+          "403 Forbidden: Ollama is blocking this extension.\n" +
+          "Fix: stop Ollama, then run:\n" +
+          "  $env:OLLAMA_ORIGINS='*'; ollama serve",
+          403
+        );
+      }
       const errText = await response.text().catch(() => response.statusText);
       throw new OllamaError(`HTTP ${response.status}: ${errText}`, response.status);
     }
