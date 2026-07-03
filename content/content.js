@@ -1,27 +1,33 @@
 /**
  * content.js — Content script entry point.
  *
- * Listens for messages from the popup / service worker,
- * orchestrates extraction → LLM → auto-selection → UI display.
+ * v2: Replaced the floating pop-up with a persistent SIDEBAR panel
+ * injected directly into the page DOM using Shadow DOM.
  *
- * NOTE: Content scripts cannot use ES module `import` via <script type="module">,
- * so all shared modules are bundled inline here via chrome.runtime.sendMessage
- * pattern (the heavy lifting is done in the background service worker which CAN
- * use ES modules). The content script is the "thin client":
- *   1. Extracts MCQ from DOM (runs in page context)
- *   2. Sends extracted data to background service worker
- *   3. Receives answer back and auto-selects it + shows UI
+ * The sidebar has a visible toggle tab pinned to the right edge of the screen,
+ * so it is fully accessible even in strict fullscreen mode.
+ *
+ * Trigger options:
+ *  - Click the 🤖 tab on the right edge of the screen
+ *  - Press Ctrl+Shift+A (keyboard shortcut via manifest command)
+ *  - Click "Analyse" button inside the sidebar
  */
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Inline micro-modules (avoid import issues in non-module content scripts)
+// DOM Extractor — inline IIFE (content scripts can't use ES module imports)
 // ─────────────────────────────────────────────────────────────────────────────
-
-// ── DOM Extractor (inline copy, kept thin) ──────────────────────────────────
 const DOMExtractor = (() => {
-
-  const QUESTION_CLASSES = ["question","question-text","q-text","quiz-question","stem","item-stem","problem","prompt","question-body","questionText"];
-  const OPTION_CLASSES   = ["option","choice","answer","answer-option","option-text","q-option","quiz-option","mcq-option","radio-label","optionItem","answer-item"];
+  // Extended with portal-specific class names observed from the screenshot
+  const QUESTION_CLASSES = [
+    "question","question-text","q-text","quiz-question","stem","item-stem",
+    "problem","prompt","question-body","questionText","questionContent",
+    "question-content","multi-choice-question","question-description",
+  ];
+  const OPTION_CLASSES = [
+    "option","choice","answer","answer-option","option-text","q-option",
+    "quiz-option","mcq-option","radio-label","optionItem","answer-item",
+    "option-item","answer-choice","option-label",
+  ];
 
   function extract(root = document) {
     return (
@@ -61,7 +67,8 @@ const DOMExtractor = (() => {
       const qEl = group.getAttribute("aria-labelledby") ? root.getElementById(group.getAttribute("aria-labelledby")) : null;
       const question = qEl?.textContent.trim() || group.getAttribute("aria-label");
       if (question) {
-        const options = [...group.querySelectorAll('[role="radio"],[role="option"],[role="checkbox"]')].map(el => el.textContent.trim()).filter(Boolean);
+        const options = [...group.querySelectorAll('[role="radio"],[role="option"],[role="checkbox"]')]
+          .map(el => el.textContent.trim()).filter(Boolean);
         if (options.length >= 2) return { question, options, context: null, strategyUsed: "ariaLabels" };
       }
     }
@@ -69,12 +76,14 @@ const DOMExtractor = (() => {
   }
 
   function trySemanticHTML(root) {
+    // fieldset + legend
     for (const legend of root.querySelectorAll("legend")) {
       const fs     = legend.closest("fieldset") || legend.parentElement;
       const labels = [...(fs?.querySelectorAll("label") ?? [])];
       const options = labels.map(l => l.textContent.trim()).filter(Boolean);
       if (options.length >= 2) return { question: legend.textContent.trim(), options, context: null, strategyUsed: "semanticHTML" };
     }
+    // radio groups by name
     const radioInputs = root.querySelectorAll('input[type="radio"]');
     if (radioInputs.length >= 2) {
       const names = [...new Set([...radioInputs].map(i => i.name).filter(Boolean))];
@@ -82,7 +91,7 @@ const DOMExtractor = (() => {
         const group   = [...root.querySelectorAll(`input[name="${name}"]`)];
         const options = group.map(inp => {
           const lbl = root.querySelector(`label[for="${inp.id}"]`) || inp.closest("label");
-          return (lbl?.textContent.trim() || inp.value).replace(/^\s*[A-Za-z]\.\s*/,"");
+          return (lbl?.textContent.trim() || inp.value).replace(/^\s*[A-Za-z]\.\s*/, "");
         }).filter(Boolean);
         const question = findPrecedingQuestion(group[0], root);
         if (question && options.length >= 2) return { question, options, context: null, strategyUsed: "semanticHTML" };
@@ -96,31 +105,37 @@ const DOMExtractor = (() => {
     if (!qEl) return null;
     const optEls = findAllByClasses(root, OPTION_CLASSES);
     if (optEls.length < 2) return null;
-    return {
-      question: qEl.textContent.trim(),
-      options:  optEls.map(el => el.textContent.trim()).filter(Boolean),
-      context:  null,
-      strategyUsed: "classNameHeuristics"
-    };
+    return { question: qEl.textContent.trim(), options: optEls.map(el => el.textContent.trim()).filter(Boolean), context: null, strategyUsed: "classNameHeuristics" };
   }
 
   function tryGenericHeuristics(root) {
+    // Find longest visible paragraph/heading that contains "?" or looks like a numbered question
     const candidates = [...root.querySelectorAll("p,h1,h2,h3,h4,h5,h6,span,div")]
       .filter(el => {
         const t = el.textContent.trim();
-        return t.length > 20 && t.length < 800 && t.includes("?") && isVisible(el) && !el.querySelector("ul,ol,li,input");
+        return t.length > 20 && t.length < 1000 &&
+          (t.includes("?") || /^\d+[.)]\s/.test(t)) &&
+          isVisible(el) && !el.querySelector("ul,ol,li,input,button");
       })
-      .sort((a,b) => (b.textContent.includes("?") ? 1 : 0) - (a.textContent.includes("?") ? 1 : 0));
+      .sort((a, b) => {
+        const aScore = (a.textContent.includes("?") ? 2 : 0) + (a.children.length === 0 ? 1 : 0);
+        const bScore = (b.textContent.includes("?") ? 2 : 0) + (b.children.length === 0 ? 1 : 0);
+        return bScore - aScore;
+      });
+
     if (!candidates.length) return null;
     const qEl     = candidates[0];
     const question = qEl.textContent.trim();
     const parent  = qEl.parentElement;
     const nextSib = qEl.nextElementSibling;
-    const listEl  = parent?.querySelector("ol,ul") || (nextSib?.tagName.match(/^(OL|UL)$/i) ? nextSib : null);
+
+    // Try nearby <ol>/<ul>
+    const listEl = parent?.querySelector("ol,ul") || (nextSib?.tagName.match(/^(OL|UL)$/i) ? nextSib : null);
     if (listEl) {
       const options = [...listEl.querySelectorAll("li")].map(li => li.textContent.trim()).filter(Boolean);
       if (options.length >= 2) return { question, options, context: null, strategyUsed: "genericHeuristics" };
     }
+    // Try sibling elements
     if (parent) {
       const siblings = [...parent.children]
         .filter(el => el !== qEl && isVisible(el))
@@ -131,7 +146,6 @@ const DOMExtractor = (() => {
     return null;
   }
 
-  // helpers
   function findByClasses(root, classes) {
     for (const cls of classes) {
       const el = root.querySelector(`.${cls},[class*="${cls}"]`);
@@ -164,24 +178,19 @@ const DOMExtractor = (() => {
   function isVisible(el) {
     if (!el) return false;
     const s = window.getComputedStyle(el);
-    return s.display !== "none" && s.visibility !== "hidden" && s.opacity !== "0" && el.offsetWidth > 0 && el.offsetHeight > 0;
+    return s.display !== "none" && s.visibility !== "hidden" && s.opacity !== "0" &&
+           el.offsetWidth > 0 && el.offsetHeight > 0;
   }
 
   return { extract };
 })();
 
-// ── Auto-Selector (inline) ───────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// Auto-Selector — inline IIFE
+// ─────────────────────────────────────────────────────────────────────────────
 const AutoSelector = (() => {
-
   function select(answerIndex, cfg, root = document) {
-    const handlers = [
-      tryNativeInput,
-      tryAriaRadio,
-      tryDataOption,
-      tryClassOption,
-      tryLabel,
-      tryListItem,
-    ];
+    const handlers = [tryNativeInput, tryAriaRadio, tryDataOption, tryClassOption, tryLabel, tryListItem];
     for (const h of handlers) {
       const r = h(answerIndex, root);
       if (r.success) {
@@ -215,7 +224,7 @@ const AutoSelector = (() => {
     const items = root.querySelectorAll('[role="radio"],[role="option"],[role="menuitemradio"]');
     if (!items[idx]) return { success: false, element: null };
     items[idx].click();
-    items[idx].setAttribute("aria-checked","true");
+    items[idx].setAttribute("aria-checked", "true");
     return { success: true, element: items[idx] };
   }
   function tryDataOption(idx, root) {
@@ -225,7 +234,7 @@ const AutoSelector = (() => {
     return { success: true, element: items[idx] };
   }
   function tryClassOption(idx, root) {
-    for (const cls of ["option","choice","answer","answer-option","q-option","quiz-option","mcq-option"]) {
+    for (const cls of ["option","choice","answer","answer-option","q-option","quiz-option","mcq-option","option-item"]) {
       const items = root.querySelectorAll(`.${cls},[class*="${cls}"]`);
       if (items[idx]) { items[idx].click(); return { success: true, element: items[idx] }; }
     }
@@ -251,193 +260,583 @@ const AutoSelector = (() => {
 
   function applyHighlight(el, color) {
     if (!el) return;
-    el.style.transition = "all 0.3s ease";
-    el.style.outline    = `3px solid ${color}`;
-    el.style.boxShadow  = `0 0 12px ${color}88`;
+    el.style.transition      = "all 0.35s ease";
+    el.style.outline         = `3px solid ${color}`;
+    el.style.boxShadow       = `0 0 16px ${color}99`;
     el.style.backgroundColor = `${color}22`;
     el.scrollIntoView({ behavior: "smooth", block: "nearest" });
     setTimeout(() => {
       el.style.outline = "";
       el.style.boxShadow = "";
       el.style.backgroundColor = "";
-    }, 3000);
+    }, 3500);
   }
 
   return { select };
 })();
 
-// ── Floating Panel (inline Shadow DOM UI) ───────────────────────────────────
-const FloatingUI = (() => {
-  const PANEL_ID = "mcq-ai-assistant-root";
+// ─────────────────────────────────────────────────────────────────────────────
+// Sidebar UI — Shadow DOM, always visible, fullscreen-safe
+// ─────────────────────────────────────────────────────────────────────────────
+const SidebarUI = (() => {
+  const HOST_ID   = "mcq-ai-sidebar-host";
+  const SIDEBAR_W = 300; // px — panel content width
+  const TAB_W     = 36;  // px — always-visible toggle tab
 
-  function getOrCreate() {
-    let host = document.getElementById(PANEL_ID);
-    if (host) return host;
-    host = document.createElement("div");
-    host.id = PANEL_ID;
-    Object.assign(host.style, {
-      position: "fixed", bottom: "24px", right: "24px",
-      zIndex: "2147483647", width: "370px", fontFamily: "sans-serif",
-    });
-    const shadow = host.attachShadow({ mode: "open" });
-    shadow.innerHTML = `<style>${styles()}</style><div class="panel"></div>`;
-    document.body.appendChild(host);
-    return host;
+  let host       = null;
+  let shadow     = null;
+  let isOpen     = false;
+  let onAnalyse  = null; // callback set by main code
+
+  // ── Public API ─────────────────────────────────────────────────────────────
+
+  function init(analyseCallback) {
+    onAnalyse = analyseCallback;
+    if (document.getElementById(HOST_ID)) return; // already mounted
+    _mount();
   }
-
-  function setHTML(html) {
-    const host = getOrCreate();
-    host.shadowRoot.querySelector(".panel").innerHTML = html;
-    host.shadowRoot.querySelector(".btn-close")?.addEventListener("click", destroy);
-  }
-
-  function destroy() { document.getElementById(PANEL_ID)?.remove(); }
 
   function showLoading() {
-    setHTML(`
-      <div class="header">
-        <span class="logo">🤖</span><span class="title">MCQ AI Assistant</span>
-      </div>
-      <div class="body">
-        <div class="loader"><div class="spinner"></div><p class="status">Analysing with DeepSeek…</p></div>
+    _setPanel(`
+      <div class="panel-inner">
+        <div class="sb-header">
+          <span class="sb-logo">🤖</span>
+          <span class="sb-title">AI Assistant</span>
+          <button class="sb-close" id="sb-close">✕</button>
+        </div>
+        <div class="sb-body">
+          <div class="loader">
+            <div class="spinner"></div>
+            <p class="status-text">Analysing with DeepSeek…</p>
+            <p class="hint-text">Please wait</p>
+          </div>
+        </div>
       </div>`);
+    _bindClose();
+  }
+
+  function showIdle() {
+    _setPanel(`
+      <div class="panel-inner">
+        <div class="sb-header">
+          <span class="sb-logo">🤖</span>
+          <span class="sb-title">AI Assistant</span>
+          <button class="sb-close" id="sb-close">✕</button>
+        </div>
+        <div class="sb-body">
+          <p class="idle-text">Ready to analyse the current MCQ on this page.</p>
+          <button class="btn-analyse" id="sb-analyse-btn">✨ Analyse MCQ</button>
+          <p class="shortcut-hint">or press <kbd>Ctrl+Shift+A</kbd></p>
+        </div>
+      </div>`);
+    _bindClose();
+    shadow.getElementById("sb-analyse-btn")?.addEventListener("click", () => {
+      if (onAnalyse) onAnalyse();
+    });
   }
 
   function showResult({ question, options, answerIndex }) {
     const letter = String.fromCharCode(65 + answerIndex);
     const lis = options.map((opt, i) => {
-      const l = String.fromCharCode(65 + i);
+      const l  = String.fromCharCode(65 + i);
       const ok = i === answerIndex;
       return `<li class="opt ${ok ? "opt--ok" : ""}">
         <span class="ltr">${l}</span>
-        <span class="txt">${esc(opt)}</span>
-        ${ok ? '<span class="badge">✓ AI Pick</span>' : ""}
+        <span class="txt">${_esc(opt)}</span>
+        ${ok ? '<span class="badge">✓</span>' : ""}
       </li>`;
     }).join("");
 
-    setHTML(`
-      <div class="header">
-        <span class="logo">🤖</span><span class="title">MCQ AI Assistant</span>
-        <button class="btn-close">✕</button>
-      </div>
-      <div class="body">
-        <p class="question">${esc(trunc(question, 130))}</p>
-        <ul class="opts">${lis}</ul>
-        <div class="meta"><span class="tag">Answer: <b>${letter}</b></span></div>
+    _setPanel(`
+      <div class="panel-inner">
+        <div class="sb-header">
+          <span class="sb-logo">🤖</span>
+          <span class="sb-title">AI Assistant</span>
+          <button class="sb-close" id="sb-close">✕</button>
+        </div>
+        <div class="sb-body">
+          <div class="answer-badge">
+            <span class="answer-label">Answer</span>
+            <span class="answer-letter">${letter}</span>
+          </div>
+          <p class="question-preview">${_esc(_trunc(question, 110))}</p>
+          <ul class="opts">${lis}</ul>
+          <button class="btn-again" id="sb-again-btn">↺ Next Question</button>
+        </div>
       </div>`);
+    _bindClose();
+    shadow.getElementById("sb-again-btn")?.addEventListener("click", showIdle);
   }
 
   function showError(msg) {
-    setHTML(`
-      <div class="header header--err">
-        <span class="logo">⚠️</span><span class="title">MCQ AI Assistant</span>
-        <button class="btn-close">✕</button>
-      </div>
-      <div class="body">
-        <p class="err">${esc(msg)}</p>
-        <p class="hint">Ensure Ollama is running on port 11434 with DeepSeek loaded.</p>
+    _setPanel(`
+      <div class="panel-inner">
+        <div class="sb-header sb-header--err">
+          <span class="sb-logo">⚠️</span>
+          <span class="sb-title">Error</span>
+          <button class="sb-close" id="sb-close">✕</button>
+        </div>
+        <div class="sb-body">
+          <p class="err-msg">${_esc(msg)}</p>
+          <p class="err-hint">Check Ollama is running:<br><code>ollama serve</code></p>
+          <button class="btn-again" id="sb-again-btn">↺ Try Again</button>
+        </div>
       </div>`);
+    _bindClose();
+    shadow.getElementById("sb-again-btn")?.addEventListener("click", showIdle);
   }
 
-  function esc(s) { return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
-  function trunc(s, n) { return s.length > n ? s.slice(0, n) + "…" : s; }
+  function open() {
+    if (!host) return;
+    isOpen = true;
+    _getSidebar().style.transform = "translateX(0)";
+    _getTab().setAttribute("data-open", "true");
+    _getTab().title = "Close AI Assistant";
+  }
 
-  function styles() {
+  function close() {
+    if (!host) return;
+    isOpen = false;
+    _getSidebar().style.transform = `translateX(${SIDEBAR_W}px)`;
+    _getTab().removeAttribute("data-open");
+    _getTab().title = "Open AI Assistant (Ctrl+Shift+A)";
+  }
+
+  function toggle() { isOpen ? close() : open(); }
+
+  // ── Private ────────────────────────────────────────────────────────────────
+
+  function _mount() {
+    host = document.createElement("div");
+    host.id = HOST_ID;
+    Object.assign(host.style, {
+      position:   "fixed",
+      top:        "0",
+      right:      "0",
+      zIndex:     "2147483647",
+      height:     "100vh",
+      width:      `${SIDEBAR_W + TAB_W}px`,
+      pointerEvents: "none",
+      fontFamily: "sans-serif",
+    });
+
+    shadow = host.attachShadow({ mode: "open" });
+    shadow.innerHTML = `
+      <style>${_styles()}</style>
+
+      <!-- Toggle Tab (always visible) -->
+      <button class="sb-tab" id="sb-tab" title="Open AI Assistant (Ctrl+Shift+A)">
+        <span class="tab-icon">🤖</span>
+        <span class="tab-label">AI</span>
+      </button>
+
+      <!-- Sidebar Panel (slides in/out) -->
+      <div class="sidebar" id="sb-panel" style="transform: translateX(${SIDEBAR_W}px)">
+        <div class="panel-inner" id="sb-panel-content">
+          <!-- populated by showIdle / showLoading / showResult / showError -->
+        </div>
+      </div>
+    `;
+
+    document.body.appendChild(host);
+
+    // Tab click toggles sidebar
+    shadow.getElementById("sb-tab").addEventListener("click", () => {
+      toggle();
+      if (isOpen) showIdle();
+    });
+
+    // Click outside (on page) closes sidebar
+    document.addEventListener("click", (e) => {
+      if (isOpen && !host.contains(e.target)) close();
+    }, { capture: false });
+  }
+
+  function _setPanel(html) {
+    const content = shadow.getElementById("sb-panel-content");
+    if (content) content.outerHTML = `<div class="panel-inner" id="sb-panel-content">${html}</div>`;
+    // Re-query after replace
+    const newContent = shadow.getElementById("sb-panel-content");
+    if (newContent) newContent.innerHTML = html;
+  }
+
+  function _bindClose() {
+    shadow.getElementById("sb-close")?.addEventListener("click", close);
+  }
+
+  function _getSidebar() { return shadow.getElementById("sb-panel"); }
+  function _getTab()     { return shadow.getElementById("sb-tab"); }
+
+  function _esc(s) {
+    return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+  }
+  function _trunc(s, n) { return s.length > n ? s.slice(0, n) + "…" : s; }
+
+  // ── Styles ──────────────────────────────────────────────────────────────────
+
+  function _styles() {
     return `
       @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
-      .panel{background:linear-gradient(135deg,#0f172a,#1e1b4b);border:1px solid rgba(139,92,246,.4);border-radius:16px;box-shadow:0 25px 60px rgba(0,0,0,.5);overflow:hidden;font-family:'Inter',sans-serif;color:#e2e8f0;font-size:13px;animation:su .35s cubic-bezier(.34,1.56,.64,1)}
-      @keyframes su{from{transform:translateY(20px);opacity:0}to{transform:translateY(0);opacity:1}}
-      .header{display:flex;align-items:center;gap:8px;padding:12px 16px;background:linear-gradient(90deg,rgba(139,92,246,.2),rgba(59,130,246,.15));border-bottom:1px solid rgba(255,255,255,.06)}
-      .header--err{background:linear-gradient(90deg,rgba(239,68,68,.2),rgba(220,38,38,.1))}
-      .logo{font-size:18px}.title{font-size:14px;font-weight:600;color:#c4b5fd;flex:1}
-      .btn-close{background:rgba(255,255,255,.08);border:none;color:#94a3b8;width:24px;height:24px;border-radius:6px;cursor:pointer;font-size:12px;transition:all .2s}
-      .btn-close:hover{background:rgba(239,68,68,.2);color:#f87171}
-      .body{padding:14px 16px}
-      .loader{display:flex;flex-direction:column;align-items:center;gap:12px;padding:10px 0}
-      .spinner{width:36px;height:36px;border:3px solid rgba(139,92,246,.2);border-top-color:#8b5cf6;border-radius:50%;animation:spin .8s linear infinite}
-      @keyframes spin{to{transform:rotate(360deg)}}
-      .status{color:#94a3b8;margin:0}
-      .question{font-size:13px;font-weight:500;color:#f1f5f9;margin:0 0 12px;line-height:1.5;border-left:3px solid #8b5cf6;padding-left:10px}
-      .opts{list-style:none;margin:0 0 12px;padding:0;display:flex;flex-direction:column;gap:6px}
-      .opt{display:flex;align-items:center;gap:8px;padding:8px 10px;border-radius:8px;border:1px solid rgba(255,255,255,.06);background:rgba(255,255,255,.03)}
-      .opt--ok{background:rgba(34,197,94,.12);border-color:rgba(34,197,94,.4);box-shadow:0 0 10px rgba(34,197,94,.1)}
-      .ltr{min-width:22px;height:22px;background:rgba(139,92,246,.25);color:#c4b5fd;border-radius:5px;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:11px}
-      .opt--ok .ltr{background:rgba(34,197,94,.3);color:#4ade80}
-      .txt{flex:1;font-size:12px;color:#cbd5e1}
-      .badge{font-size:10px;background:#22c55e;color:#052e16;padding:2px 6px;border-radius:100px;font-weight:700;white-space:nowrap}
-      .meta{display:flex;gap:8px;flex-wrap:wrap}
-      .tag{font-size:11px;color:#64748b;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.06);border-radius:100px;padding:2px 8px}
-      .tag b{color:#94a3b8}
-      .err{color:#f87171;font-weight:500;margin:0 0 8px}
-      .hint{color:#64748b;font-size:12px;margin:0}
+
+      *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+      /* ── Toggle Tab ── */
+      .sb-tab {
+        position: absolute;
+        top: 50%;
+        left: 0;
+        transform: translateY(-50%);
+        width: ${TAB_W}px;
+        height: 80px;
+        background: linear-gradient(180deg, #7c3aed, #4f46e5);
+        border: none;
+        border-radius: 12px 0 0 12px;
+        cursor: pointer;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 4px;
+        pointer-events: all;
+        box-shadow: -4px 0 20px rgba(124, 58, 237, 0.5);
+        transition: width 0.2s ease, background 0.2s;
+        z-index: 2;
+      }
+      .sb-tab:hover {
+        background: linear-gradient(180deg, #8b5cf6, #6366f1);
+        width: ${TAB_W + 4}px;
+      }
+      .sb-tab[data-open="true"] {
+        background: linear-gradient(180deg, #4f46e5, #3730a3);
+        border-radius: 0 0 0 12px;
+      }
+      .tab-icon { font-size: 16px; line-height: 1; }
+      .tab-label {
+        font-family: 'Inter', sans-serif;
+        font-size: 9px;
+        font-weight: 700;
+        color: rgba(255,255,255,0.9);
+        letter-spacing: 0.5px;
+        text-transform: uppercase;
+      }
+
+      /* ── Sidebar Panel ── */
+      .sidebar {
+        position: absolute;
+        top: 0;
+        right: 0;
+        width: ${SIDEBAR_W}px;
+        height: 100vh;
+        background: linear-gradient(180deg, #0f172a 0%, #1e1b4b 100%);
+        border-left: 1px solid rgba(139, 92, 246, 0.3);
+        box-shadow: -8px 0 40px rgba(0, 0, 0, 0.6);
+        display: flex;
+        flex-direction: column;
+        pointer-events: all;
+        transition: transform 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+        overflow: hidden;
+      }
+
+      /* ── Panel Inner ── */
+      .panel-inner {
+        display: flex;
+        flex-direction: column;
+        height: 100%;
+        font-family: 'Inter', sans-serif;
+        color: #e2e8f0;
+        font-size: 13px;
+      }
+
+      /* ── Header ── */
+      .sb-header {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 16px 14px 14px;
+        background: linear-gradient(90deg, rgba(124,58,237,0.25), rgba(59,130,246,0.15));
+        border-bottom: 1px solid rgba(255,255,255,0.07);
+        flex-shrink: 0;
+      }
+      .sb-header--err {
+        background: linear-gradient(90deg, rgba(239,68,68,0.2), rgba(220,38,38,0.1));
+      }
+      .sb-logo  { font-size: 20px; }
+      .sb-title { font-size: 14px; font-weight: 700; color: #c4b5fd; flex: 1; letter-spacing: 0.2px; }
+      .sb-close {
+        width: 26px; height: 26px;
+        background: rgba(255,255,255,0.07);
+        border: 1px solid rgba(255,255,255,0.08);
+        border-radius: 7px;
+        color: #64748b;
+        font-size: 12px;
+        cursor: pointer;
+        display: flex; align-items: center; justify-content: center;
+        transition: all 0.2s;
+        flex-shrink: 0;
+      }
+      .sb-close:hover { background: rgba(239,68,68,0.2); color: #f87171; border-color: rgba(239,68,68,0.3); }
+
+      /* ── Body ── */
+      .sb-body {
+        flex: 1;
+        padding: 16px 14px;
+        overflow-y: auto;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+      .sb-body::-webkit-scrollbar { width: 4px; }
+      .sb-body::-webkit-scrollbar-track { background: transparent; }
+      .sb-body::-webkit-scrollbar-thumb { background: rgba(139,92,246,0.3); border-radius: 2px; }
+
+      /* ── Idle state ── */
+      .idle-text {
+        font-size: 13px;
+        color: #64748b;
+        line-height: 1.5;
+        padding: 8px 0;
+      }
+      .btn-analyse {
+        width: 100%;
+        padding: 13px;
+        border-radius: 12px;
+        border: none;
+        background: linear-gradient(135deg, #7c3aed, #4f46e5);
+        color: #fff;
+        font-size: 14px;
+        font-weight: 600;
+        font-family: 'Inter', sans-serif;
+        cursor: pointer;
+        transition: all 0.25s;
+        box-shadow: 0 4px 15px rgba(124,58,237,0.4);
+        letter-spacing: 0.2px;
+      }
+      .btn-analyse:hover {
+        transform: translateY(-1px);
+        box-shadow: 0 6px 22px rgba(124,58,237,0.55);
+      }
+      .btn-analyse:active { transform: translateY(0); }
+      .shortcut-hint {
+        text-align: center;
+        font-size: 11px;
+        color: #334155;
+      }
+      kbd {
+        background: rgba(255,255,255,0.07);
+        border: 1px solid rgba(255,255,255,0.12);
+        border-radius: 4px;
+        padding: 1px 5px;
+        font-family: monospace;
+        font-size: 10px;
+        color: #64748b;
+      }
+
+      /* ── Loading ── */
+      .loader {
+        display: flex; flex-direction: column;
+        align-items: center; gap: 14px;
+        padding: 24px 0;
+      }
+      .spinner {
+        width: 40px; height: 40px;
+        border: 3px solid rgba(139,92,246,0.2);
+        border-top-color: #8b5cf6;
+        border-radius: 50%;
+        animation: spin 0.8s linear infinite;
+      }
+      @keyframes spin { to { transform: rotate(360deg); } }
+      .status-text { color: #94a3b8; font-size: 13px; font-weight: 500; }
+      .hint-text   { color: #334155; font-size: 11px; }
+
+      /* ── Answer badge ── */
+      .answer-badge {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        background: linear-gradient(135deg, rgba(34,197,94,0.12), rgba(16,185,129,0.08));
+        border: 1px solid rgba(34,197,94,0.3);
+        border-radius: 12px;
+        padding: 12px 16px;
+      }
+      .answer-label { font-size: 11px; font-weight: 600; color: #4ade80; text-transform: uppercase; letter-spacing: 0.8px; }
+      .answer-letter {
+        font-size: 28px;
+        font-weight: 800;
+        color: #22c55e;
+        line-height: 1;
+        text-shadow: 0 0 20px rgba(34,197,94,0.5);
+      }
+
+      /* ── Question preview ── */
+      .question-preview {
+        font-size: 12px;
+        color: #94a3b8;
+        line-height: 1.5;
+        border-left: 3px solid rgba(139,92,246,0.5);
+        padding-left: 10px;
+        font-style: italic;
+      }
+
+      /* ── Options list ── */
+      .opts {
+        list-style: none;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+      .opt {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 8px 10px;
+        border-radius: 8px;
+        border: 1px solid rgba(255,255,255,0.05);
+        background: rgba(255,255,255,0.02);
+        transition: all 0.2s;
+      }
+      .opt--ok {
+        background: rgba(34,197,94,0.1);
+        border-color: rgba(34,197,94,0.35);
+        box-shadow: 0 0 12px rgba(34,197,94,0.08);
+      }
+      .ltr {
+        min-width: 22px; height: 22px;
+        background: rgba(139,92,246,0.2);
+        color: #a78bfa;
+        border-radius: 6px;
+        display: flex; align-items: center; justify-content: center;
+        font-size: 11px; font-weight: 700;
+      }
+      .opt--ok .ltr { background: rgba(34,197,94,0.25); color: #4ade80; }
+      .txt { flex: 1; font-size: 12px; color: #94a3b8; line-height: 1.4; }
+      .opt--ok .txt { color: #d1fae5; }
+      .badge {
+        font-size: 10px;
+        background: #22c55e;
+        color: #052e16;
+        padding: 2px 6px;
+        border-radius: 100px;
+        font-weight: 800;
+      }
+
+      /* ── Buttons ── */
+      .btn-again {
+        width: 100%;
+        padding: 10px;
+        border-radius: 10px;
+        border: 1px solid rgba(139,92,246,0.3);
+        background: rgba(139,92,246,0.08);
+        color: #a78bfa;
+        font-size: 12px;
+        font-weight: 500;
+        font-family: 'Inter', sans-serif;
+        cursor: pointer;
+        transition: all 0.2s;
+        margin-top: 4px;
+      }
+      .btn-again:hover { background: rgba(139,92,246,0.2); color: #c4b5fd; }
+
+      /* ── Error ── */
+      .err-msg {
+        color: #f87171;
+        font-size: 13px;
+        font-weight: 500;
+        line-height: 1.5;
+      }
+      .err-hint {
+        color: #475569;
+        font-size: 12px;
+        line-height: 1.6;
+      }
+      code {
+        background: rgba(255,255,255,0.06);
+        border: 1px solid rgba(255,255,255,0.08);
+        border-radius: 5px;
+        padding: 2px 6px;
+        font-family: monospace;
+        font-size: 11px;
+        color: #94a3b8;
+      }
     `;
   }
 
-  return { showLoading, showResult, showError, destroy };
+  return { init, open, close, toggle, showIdle, showLoading, showResult, showError };
 })();
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Main message handler
+// Main — Bootstrap sidebar & message listener
 // ─────────────────────────────────────────────────────────────────────────────
 
+// Mount sidebar as soon as the script loads
+SidebarUI.init(runAnalysis);
+
+// Listen for messages from popup / service worker / keyboard shortcut
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg.action === "ANALYSE_MCQ") {
-    handleAnalyse(sendResponse);
-    return true; // keep channel open for async response
+    SidebarUI.open();
+    runAnalysis(sendResponse);
+    return true;
   }
-
+  if (msg.action === "TOGGLE_SIDEBAR") {
+    SidebarUI.toggle();
+    sendResponse({ ok: true });
+  }
   if (msg.action === "PING") {
     sendResponse({ alive: true });
   }
 });
 
-async function handleAnalyse(sendResponse) {
-  try {
-    // 1. Show loading panel immediately
-    FloatingUI.showLoading();
+// ─────────────────────────────────────────────────────────────────────────────
+// Core analysis logic
+// ─────────────────────────────────────────────────────────────────────────────
 
-    // 2. Extract MCQ from page DOM
+async function runAnalysis(sendResponse) {
+  SidebarUI.open();
+  SidebarUI.showLoading();
+
+  try {
+    // 1. Extract MCQ from DOM
     const mcq = DOMExtractor.extract(document);
     if (!mcq) {
-      const errMsg = "No MCQ detected on this page. Try clicking inside the question area first.";
-      FloatingUI.showError(errMsg);
-      sendResponse({ success: false, error: errMsg });
+      const errMsg = "No MCQ detected. Make sure a question is visible on screen.";
+      SidebarUI.showError(errMsg);
+      sendResponse?.({ success: false, error: errMsg });
       return;
     }
 
-    // 3. Ask background service worker to call Ollama
+    // 2. Call Ollama via background service worker
     const response = await chrome.runtime.sendMessage({
-      action: "CALL_OLLAMA",
+      action:  "CALL_OLLAMA",
       payload: mcq,
     });
 
     if (!response.success) {
-      FloatingUI.showError(response.error || "Unknown error from Ollama.");
-      sendResponse({ success: false, error: response.error });
+      SidebarUI.showError(response.error || "Unknown error from Ollama.");
+      sendResponse?.({ success: false, error: response.error });
       return;
     }
 
     const { answerIndex, answerLetter } = response;
 
-    // 4. Auto-select in DOM
+    // 3. Auto-select the answer in the DOM
     const cfg = response.cfg || { highlightCorrectOption: true, highlightColor: "#22c55e" };
     AutoSelector.select(answerIndex, cfg, document);
 
-    // 5. Show result panel
-    FloatingUI.showResult({
-      question: mcq.question,
-      options:  mcq.options,
+    // 4. Show result in sidebar
+    SidebarUI.showResult({
+      question:    mcq.question,
+      options:     mcq.options,
       answerIndex,
       answerLetter,
     });
 
-    sendResponse({ success: true, answerIndex, answerLetter });
+    sendResponse?.({ success: true, answerIndex, answerLetter });
 
   } catch (err) {
-    const errMsg = err.message || "Unexpected content script error.";
-    FloatingUI.showError(errMsg);
-    sendResponse({ success: false, error: errMsg });
+    const errMsg = err.message || "Unexpected error in content script.";
+    SidebarUI.showError(errMsg);
+    sendResponse?.({ success: false, error: errMsg });
   }
 }
 
-console.info("[MCQ AI Assistant] Content script loaded.");
+console.info("[MCQ AI Assistant v2] Sidebar content script loaded.");

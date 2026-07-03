@@ -1,8 +1,24 @@
 {
   "manifest_version": 3,
   "name": "MCQ AI Assistant",
-  "version": "1.0.0",
-  "description": "Extracts MCQ questions from your practice portal and auto-selects answers using local Ollama (DeepSeek).",
+  "version": "2.0.0",
+  "description": "Extracts MCQ questions from your practice portal and auto-selects answers using local Ollama (DeepSeek). Features a fullscreen-safe sidebar UI.",
+  "commands": {
+    "analyse-mcq": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+A",
+        "mac": "Command+Shift+A"
+      },
+      "description": "Analyse the current MCQ and auto-select answer"
+    },
+    "toggle-sidebar": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+S",
+        "mac": "Command+Shift+S"
+      },
+      "description": "Toggle the AI Assistant sidebar"
+    }
+  },
   "permissions": [
     "activeTab",
     "scripting",
