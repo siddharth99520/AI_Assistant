@@ -368,7 +368,9 @@ const SidebarUI = (() => {
     shadow.getElementById("sb-again-btn")?.addEventListener("click", showIdle);
   }
 
-  function showError(msg) {
+  function showError(msg, hint) {
+    // Smart hint: if not provided, show context-appropriate guidance
+    const defaultHint = hint || "Check Ollama is running:<br><code>$env:OLLAMA_ORIGINS='*'; ollama serve</code>";
     _setPanel(`
       <div class="panel-inner">
         <div class="sb-header sb-header--err">
@@ -378,7 +380,7 @@ const SidebarUI = (() => {
         </div>
         <div class="sb-body">
           <p class="err-msg">${_esc(msg)}</p>
-          <p class="err-hint">Check Ollama is running:<br><code>ollama serve</code></p>
+          <p class="err-hint">${defaultHint}</p>
           <button class="btn-again" id="sb-again-btn">↺ Try Again</button>
         </div>
       </div>`);
@@ -790,29 +792,68 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 // Core analysis logic
 // ─────────────────────────────────────────────────────────────────────────────
 
+/**
+ * Detects if the Chrome extension runtime context is still valid.
+ * After an extension reload, old content scripts become "orphaned" and
+ * any chrome.runtime call throws "Extension context invalidated".
+ */
+function isContextValid() {
+  try {
+    // Accessing chrome.runtime.id throws if context is invalidated
+    return !!chrome.runtime?.id;
+  } catch {
+    return false;
+  }
+}
+
 async function runAnalysis(sendResponse) {
   SidebarUI.open();
   SidebarUI.showLoading();
+
+  // ── Guard: check if extension context is still alive ─────────────────────
+  if (!isContextValid()) {
+    SidebarUI.showError(
+      "Extension was reloaded.",
+      "Please <b>refresh this page (F5)</b> to reconnect the AI Assistant."
+    );
+    sendResponse?.({ success: false, error: "Extension context invalidated" });
+    return;
+  }
 
   try {
     // 1. Extract MCQ from DOM
     const mcq = DOMExtractor.extract(document);
     if (!mcq) {
       const errMsg = "No MCQ detected. Make sure a question is visible on screen.";
-      SidebarUI.showError(errMsg);
+      SidebarUI.showError(errMsg, "Try clicking inside the question area, then press Ctrl+Shift+A again.");
       sendResponse?.({ success: false, error: errMsg });
       return;
     }
 
     // 2. Call Ollama via background service worker
-    const response = await chrome.runtime.sendMessage({
-      action:  "CALL_OLLAMA",
-      payload: mcq,
-    });
+    let response;
+    try {
+      response = await chrome.runtime.sendMessage({
+        action:  "CALL_OLLAMA",
+        payload: mcq,
+      });
+    } catch (runtimeErr) {
+      // Specifically catch "Extension context invalidated" from chrome.runtime
+      if (runtimeErr.message?.includes("Extension context invalidated") ||
+          runtimeErr.message?.includes("context invalidated")) {
+        SidebarUI.showError(
+          "Extension was reloaded — context lost.",
+          "<b>Refresh this page (F5)</b> to reconnect the AI Assistant."
+        );
+        sendResponse?.({ success: false, error: "Extension context invalidated" });
+        return;
+      }
+      throw runtimeErr; // re-throw unexpected errors
+    }
 
-    if (!response.success) {
-      SidebarUI.showError(response.error || "Unknown error from Ollama.");
-      sendResponse?.({ success: false, error: response.error });
+    if (!response?.success) {
+      SidebarUI.showError(response?.error || "Unknown error from Ollama.");
+      sendResponse?.({ success: false, error: response?.error });
       return;
     }
 
@@ -834,7 +875,10 @@ async function runAnalysis(sendResponse) {
 
   } catch (err) {
     const errMsg = err.message || "Unexpected error in content script.";
-    SidebarUI.showError(errMsg);
+    const hint = errMsg.includes("fetch") || errMsg.includes("network")
+      ? "Ollama may be down. Run: <code>$env:OLLAMA_ORIGINS='*'; ollama serve</code>"
+      : undefined;
+    SidebarUI.showError(errMsg, hint);
     sendResponse?.({ success: false, error: errMsg });
   }
 }
