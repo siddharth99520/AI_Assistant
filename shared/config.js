@@ -5,7 +5,7 @@
 
 export const DEFAULT_CONFIG = {
   ollamaBaseUrl: "http://localhost:11434",
-  ollamaModel: "deepseek-coder:6.7b",
+  ollamaModel: "gemma3:4b",
   requestTimeoutMs: 30_000,
   temperature: 0.1,          // Low temp → deterministic, factual answers
   maxTokens: 512,
