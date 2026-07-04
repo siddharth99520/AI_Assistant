@@ -41,33 +41,36 @@ const DOMExtractor = (() => {
   }
 
   function tryDataAttributes(root) {
-    const qEl = root.querySelector("[data-question]");
-    if (!qEl) return null;
+    const qEls = [...root.querySelectorAll("[data-question]")].filter(isVisible);
+    if (!qEls.length) return null;
+    const qEl = qEls[0];
     const question = qEl.dataset.question || qEl.textContent.trim();
-    const optEls   = root.querySelectorAll("[data-option]");
+    const optEls = [...root.querySelectorAll("[data-option]")].filter(isVisible);
     if (optEls.length < 2) return null;
-    const options = [...optEls].map(el => el.dataset.option || el.textContent.trim());
+    const options = optEls.map(el => el.dataset.option || el.textContent.trim());
     return { question, options, context: root.querySelector("[data-context]")?.textContent.trim() ?? null, strategyUsed: "dataAttributes" };
   }
 
   function tryAriaLabels(root) {
-    for (const fs of root.querySelectorAll("fieldset")) {
+    const fieldsets = [...root.querySelectorAll("fieldset")].filter(isVisible);
+    for (const fs of fieldsets) {
       const legend = fs.querySelector("legend");
       if (!legend) continue;
-      const radios = fs.querySelectorAll('[role="radio"],input[type="radio"],input[type="checkbox"]');
+      const radios = [...fs.querySelectorAll('[role="radio"],input[type="radio"],input[type="checkbox"]')].filter(isVisible);
       if (radios.length < 2) continue;
-      const options = [...radios].map(el => {
+      const options = radios.map(el => {
         const lbl = root.querySelector(`label[for="${el.id}"]`) || el.closest("label");
         return (lbl?.textContent.trim() || el.getAttribute("aria-label") || el.value || "").trim();
       }).filter(Boolean);
       if (options.length >= 2) return { question: legend.textContent.trim(), options, context: null, strategyUsed: "ariaLabels" };
     }
-    const group = root.querySelector('[role="group"],[role="radiogroup"]');
-    if (group) {
+    const groups = [...root.querySelectorAll('[role="group"],[role="radiogroup"]')].filter(isVisible);
+    for (const group of groups) {
       const qEl = group.getAttribute("aria-labelledby") ? root.getElementById(group.getAttribute("aria-labelledby")) : null;
       const question = qEl?.textContent.trim() || group.getAttribute("aria-label");
       if (question) {
         const options = [...group.querySelectorAll('[role="radio"],[role="option"],[role="checkbox"]')]
+          .filter(isVisible)
           .map(el => el.textContent.trim()).filter(Boolean);
         if (options.length >= 2) return { question, options, context: null, strategyUsed: "ariaLabels" };
       }
@@ -77,9 +80,10 @@ const DOMExtractor = (() => {
 
   function trySemanticHTML(root) {
     // fieldset + legend
-    for (const legend of root.querySelectorAll("legend")) {
+    const legends = [...root.querySelectorAll("legend")].filter(isVisible);
+    for (const legend of legends) {
       const fs     = legend.closest("fieldset") || legend.parentElement;
-      const labels = [...(fs?.querySelectorAll("label") ?? [])];
+      const labels = [...(fs?.querySelectorAll("label") ?? [])].filter(isVisible);
       const options = labels.map(l => l.textContent.trim()).filter(Boolean);
       if (options.length >= 2) return { question: legend.textContent.trim(), options, context: null, strategyUsed: "semanticHTML" };
     }
@@ -118,8 +122,8 @@ const DOMExtractor = (() => {
           isVisible(el) && !el.querySelector("ul,ol,li,input,button");
       })
       .sort((a, b) => {
-        const aScore = (a.textContent.includes("?") ? 2 : 0) + (a.children.length === 0 ? 1 : 0);
-        const bScore = (b.textContent.includes("?") ? 2 : 0) + (b.children.length === 0 ? 1 : 0);
+        const aScore = (a.textContent.includes("?") ? 2 : 0) + (a.children.length === 0 ? 1 : 0) + getActiveScore(a);
+        const bScore = (b.textContent.includes("?") ? 2 : 0) + (b.children.length === 0 ? 1 : 0) + getActiveScore(b);
         return bScore - aScore;
       });
 
@@ -146,12 +150,35 @@ const DOMExtractor = (() => {
     return null;
   }
 
-  function findByClasses(root, classes) {
-    for (const cls of classes) {
-      const el = root.querySelector(`.${cls},[class*="${cls}"]`);
-      if (el && isVisible(el)) return el;
+  function getActiveScore(el) {
+    let score = 0;
+    let cur = el;
+    while (cur && cur !== document.body) {
+      if (cur.className && typeof cur.className === 'string' && /(active|current|show|visible)/i.test(cur.className)) {
+        score += 10;
+        break; // one boost is enough
+      }
+      cur = cur.parentElement;
     }
-    return null;
+    return score;
+  }
+
+  function findByClasses(root, classes) {
+    let best = null;
+    let bestScore = -1;
+    for (const cls of classes) {
+      const els = root.querySelectorAll(`.${cls},[class*="${cls}"]`);
+      for (const el of els) {
+        if (isVisible(el)) {
+          const score = getActiveScore(el);
+          if (score > bestScore) {
+            bestScore = score;
+            best = el;
+          }
+        }
+      }
+    }
+    return best;
   }
   function findAllByClasses(root, classes) {
     const results = [], seen = new Set();
@@ -177,9 +204,32 @@ const DOMExtractor = (() => {
   }
   function isVisible(el) {
     if (!el) return false;
-    const s = window.getComputedStyle(el);
-    return s.display !== "none" && s.visibility !== "hidden" && s.opacity !== "0" &&
-           el.offsetWidth > 0 && el.offsetHeight > 0;
+    
+    if (el.offsetWidth === 0 || el.offsetHeight === 0) return false;
+
+    // Walk up the tree to check for zero-size containers or hidden ancestors
+    let cur = el;
+    while (cur && cur !== document.body && cur !== document.documentElement) {
+      const s = window.getComputedStyle(cur);
+      if (s.display === "none" || s.visibility === "hidden" || s.opacity === "0") return false;
+      
+      // If a container has 0 height/width and hides overflow, its children are hidden
+      if ((s.overflow === "hidden" || s.overflow === "clip" || s.overflowX === "hidden" || s.overflowY === "hidden") &&
+          (cur.offsetWidth === 0 || cur.offsetHeight === 0)) {
+        return false;
+      }
+      cur = cur.parentElement;
+    }
+
+    // Check if element is within the viewport bounds (handles carousels/sliders)
+    const rect = el.getBoundingClientRect();
+    const inViewport = (
+      rect.bottom >= 0 &&
+      rect.right >= 0 &&
+      rect.top <= (window.innerHeight || document.documentElement.clientHeight) &&
+      rect.left <= (window.innerWidth || document.documentElement.clientWidth)
+    );
+    return inViewport;
   }
 
   return { extract };
@@ -307,7 +357,7 @@ const SidebarUI = (() => {
         <div class="sb-body">
           <div class="loader">
             <div class="spinner"></div>
-            <p class="status-text">Analysing with DeepSeek…</p>
+            <p class="status-text">Analysing with AI…</p>
             <p class="hint-text">Please wait</p>
           </div>
         </div>
@@ -402,6 +452,8 @@ const SidebarUI = (() => {
     _getSidebar().style.transform = `translateX(${SIDEBAR_W}px)`;
     _getTab().removeAttribute("data-open");
     _getTab().title = "Open AI Assistant (Ctrl+Shift+A)";
+    // Reset to idle so stale results never show on next open
+    showIdle();
   }
 
   function toggle() { isOpen ? close() : open(); }
@@ -448,10 +500,15 @@ const SidebarUI = (() => {
       if (isOpen) showIdle();
     });
 
-    // Click outside (on page) closes sidebar
+    // Close sidebar when user clicks outside it.
+    // e.isTrusted filters out programmatic .click() calls (e.g. AutoSelector)
+    // e.composedPath() correctly handles Shadow DOM boundaries.
     document.addEventListener("click", (e) => {
-      if (isOpen && !host.contains(e.target)) close();
-    }, { capture: false });
+      if (!isOpen) return;
+      if (!e.isTrusted) return;                          // ignore programmatic clicks
+      if (e.composedPath().includes(host)) return;       // ignore clicks inside sidebar
+      close();
+    }, { capture: true });
   }
 
   function _setPanel(html) {

@@ -72,11 +72,21 @@ async function runAnalysis() {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     if (!tab?.id) throw new Error("No active tab found.");
 
-    // Ensure content script is injected
-    await chrome.scripting.executeScript({
-      target: { tabId: tab.id },
-      files: ["content/content.js"],
-    }).catch(() => {}); // Already injected — ignore error
+    // Only inject content script if it isn't already running
+    let alive = false;
+    try {
+      const ping = await chrome.tabs.sendMessage(tab.id, { action: "PING" });
+      alive = ping?.alive === true;
+    } catch { /* not injected yet */ }
+
+    if (!alive) {
+      await chrome.scripting.executeScript({
+        target: { tabId: tab.id },
+        files: ["content/content.js"],
+      }).catch(() => {});
+      // Small delay to let the script initialise
+      await new Promise(r => setTimeout(r, 150));
+    }
 
     const response = await chrome.tabs.sendMessage(tab.id, { action: "ANALYSE_MCQ" });
 
