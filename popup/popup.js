@@ -10,7 +10,7 @@ const btnOptions = $("btn-options");
 const statusDot  = $("status-dot");
 const statusText = $("status-text");
 const resultToast = $("result-toast");
-const footerModel = $("footer-model");
+const footerModelSelect = $("footer-model-select");
 const footerUrl   = $("footer-url");
 
 // ── Init ────────────────────────────────────────────────────────────────────
@@ -26,6 +26,23 @@ btnAnalyse.addEventListener("click", runAnalysis);
 btnRefresh.addEventListener("click", checkOllamaStatus);
 btnOptions.addEventListener("click", () => chrome.runtime.openOptionsPage());
 
+footerModelSelect.addEventListener("change", (e) => {
+  const newModel = e.target.value;
+  if (newModel) saveModelConfig(newModel);
+});
+
+async function saveModelConfig(modelName) {
+  try {
+    const cfg = await chrome.runtime.sendMessage({ action: "GET_CONFIG" });
+    cfg.ollamaModel = modelName;
+    await chrome.storage.sync.set(cfg);
+    showToast(`Model switched to ${modelName}`);
+    setTimeout(hideToast, 2000);
+  } catch (err) {
+    console.error("Failed to save model", err);
+  }
+}
+
 // ── Ollama Status ────────────────────────────────────────────────────────────
 
 async function checkOllamaStatus() {
@@ -39,6 +56,29 @@ async function checkOllamaStatus() {
       statusDot.classList.add("online");
       statusText.textContent = "Online ✓";
       btnAnalyse.disabled = false;
+      
+      // Update model dropdown options
+      const currentVal = footerModelSelect.value;
+      footerModelSelect.innerHTML = "";
+      if (result.models && result.models.length > 0) {
+        result.models.forEach(model => {
+          const opt = document.createElement("option");
+          opt.value = model;
+          opt.textContent = model;
+          footerModelSelect.appendChild(opt);
+        });
+        if (result.models.includes(currentVal)) {
+          footerModelSelect.value = currentVal;
+        } else {
+          footerModelSelect.value = result.models[0];
+          saveModelConfig(result.models[0]);
+        }
+      } else {
+        const opt = document.createElement("option");
+        opt.value = currentVal;
+        opt.textContent = currentVal || "No models found";
+        footerModelSelect.appendChild(opt);
+      }
     } else {
       statusDot.classList.add("offline");
       statusText.textContent = "Offline";
@@ -55,10 +95,11 @@ async function checkOllamaStatus() {
 async function loadDisplayConfig() {
   try {
     const cfg = await chrome.runtime.sendMessage({ action: "GET_CONFIG" });
-    footerModel.textContent = `Model: ${cfg.ollamaModel}`;
+    footerModelSelect.innerHTML = `<option value="${cfg.ollamaModel}">${cfg.ollamaModel}</option>`;
+    footerModelSelect.value = cfg.ollamaModel;
     footerUrl.textContent   = cfg.ollamaBaseUrl.replace("http://", "");
   } catch {
-    footerModel.textContent = "Model: unknown";
+    footerModelSelect.innerHTML = `<option value="">unknown</option>`;
   }
 }
 

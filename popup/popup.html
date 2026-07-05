@@ -161,6 +161,14 @@
       font-size: 11px; color: #475569; text-decoration: none;
       transition: color .2s;
     }
+    .footer-model-wrapper { display: flex; align-items: center; gap: 4px; }
+    .footer-label { font-size: 11px; color: #475569; }
+    .footer-select {
+      background: transparent; border: none; color: #94a3b8; font-size: 11px; font-family: inherit;
+      cursor: pointer; outline: none; padding: 0; max-width: 130px; text-overflow: ellipsis;
+    }
+    .footer-select:hover { color: #c4b5fd; }
+    .footer-select option { background: #1e1b4b; color: #e2e8f0; }
     .footer a:hover { color: #c4b5fd; }
   </style>
 </head>
@@ -201,7 +209,12 @@
 
   <!-- Footer -->
   <div class="footer">
-    <a href="#" id="footer-model">Model: loading…</a>
+    <div class="footer-model-wrapper">
+      <span class="footer-label">Model:</span>
+      <select id="footer-model-select" class="footer-select">
+        <option value="">loading…</option>
+      </select>
+    </div>
     <a href="#" id="footer-url">localhost:11434</a>
   </div>
 
