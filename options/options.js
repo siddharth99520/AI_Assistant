@@ -35,6 +35,7 @@ const fields = {
   const cfg = await loadConfig();
   populateForm(cfg);
   bindEvents();
+  testConnection(); // Auto-test to populate model datalist
 })();
 
 // ── Load & populate ──────────────────────────────────────────────────────────
@@ -99,9 +100,21 @@ async function testConnection() {
     const res = await fetch(`${url}/api/tags`, { signal: AbortSignal.timeout(5000) });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data   = await res.json();
-    const models = (data.models || []).map((m) => m.name).join(", ") || "no models loaded";
+    const modelNames = (data.models || []).map((m) => m.name);
+    const models = modelNames.join(", ") || "no models loaded";
     resultEl.textContent = `✓ Connected! Models: ${models}`;
     resultEl.className   = "conn-result ok";
+
+    // Populate datalist
+    const dataList = $("ollama-model-list");
+    if (dataList) {
+      dataList.innerHTML = "";
+      modelNames.forEach(name => {
+        const option = document.createElement("option");
+        option.value = name;
+        dataList.appendChild(option);
+      });
+    }
   } catch (err) {
     resultEl.textContent = `✗ Failed: ${err.message}. Run: ollama serve`;
     resultEl.className   = "conn-result err";
