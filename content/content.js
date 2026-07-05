@@ -322,7 +322,43 @@ const AutoSelector = (() => {
     }, 3500);
   }
 
-  return { select };
+  function triggerClick(el) {
+    if (!el) return;
+    console.log("[MCQ AI] Auto-clicking next button:", el);
+    el.click(); // Keep it simple, since manual .click() works perfectly
+  }
+
+  function clickNextButton(root) {
+    const nextWords = ["next", "continue", "submit & next", "next question", ">", "→"];
+    
+    // 1. Check standard semantic buttons
+    const buttons = root.querySelectorAll("button, a, input[type='button'], input[type='submit'], [role='button']");
+    for (const btn of buttons) {
+      const rect = btn.getBoundingClientRect();
+      if (rect.width === 0 || rect.height === 0) continue;
+      
+      const text = (btn.innerText || btn.value || "").trim().toLowerCase();
+      const ariaLabel = (btn.getAttribute("aria-label") || "").trim().toLowerCase();
+      
+      if (nextWords.includes(text) || nextWords.includes(ariaLabel)) {
+        triggerClick(btn);
+        return true;
+      }
+    }
+    
+    // 2. Check non-semantic elements (divs/spans) used as buttons by looking for specific class names
+    const classBtns = root.querySelectorAll(".next-btn, .btn-next, .next_btn, .btn--next");
+    for (const btn of classBtns) {
+      // Intentionally skipping visibility check here because if it exists, we want to click it.
+      triggerClick(btn);
+      return true;
+    }
+    
+    console.log("[MCQ AI] Could not find a visible 'Next' button to click.");
+    return false;
+  }
+
+  return { select, clickNextButton };
 })();
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -863,6 +899,32 @@ function isContextValid() {
   }
 }
 
+// Track the last question to detect when the page has successfully navigated
+let lastAnalyzedQuestion = null;
+
+function waitForNewQuestionAndAnalyze() {
+  let attempts = 0;
+  console.log("[MCQ AI] Auto-pilot: waiting for next question to load...");
+  
+  const checkInterval = setInterval(() => {
+    attempts++;
+    
+    // Give up after 15 seconds (30 attempts * 500ms) or if extension context is lost
+    if (!isContextValid() || attempts > 30) {
+      clearInterval(checkInterval);
+      console.log("[MCQ AI] Auto-pilot stopped: timed out waiting for next question.");
+      return;
+    }
+    
+    const mcq = DOMExtractor.extract(document);
+    if (mcq && mcq.question && mcq.question !== lastAnalyzedQuestion) {
+      clearInterval(checkInterval);
+      console.log("[MCQ AI] Auto-pilot: new question detected. Starting analysis.");
+      runAnalysis();
+    }
+  }, 500);
+}
+
 async function runAnalysis(sendResponse) {
   SidebarUI.open();
   SidebarUI.showLoading();
@@ -886,6 +948,8 @@ async function runAnalysis(sendResponse) {
       sendResponse?.({ success: false, error: errMsg });
       return;
     }
+    
+    lastAnalyzedQuestion = mcq.question;
 
     // 2. Call Ollama via background service worker
     let response;
@@ -917,10 +981,27 @@ async function runAnalysis(sendResponse) {
     const { answerIndex, answerLetter } = response;
 
     // 3. Auto-select the answer in the DOM
-    const cfg = response.cfg || { highlightCorrectOption: true, highlightColor: "#22c55e" };
+    const cfg = response.cfg || { highlightCorrectOption: true, highlightColor: "#22c55e", autoClickNext: false };
     AutoSelector.select(answerIndex, cfg, document);
 
-    // 4. Show result in sidebar
+    console.log("[MCQ AI] Config loaded. autoClickNext is:", cfg.autoClickNext);
+
+    // 4. Auto-click next button if configured
+    if (cfg.autoClickNext) {
+      setTimeout(() => {
+        SidebarUI.close(); // Hide sidebar to prevent any overlay overlap issues
+        setTimeout(() => {
+          const clicked = AutoSelector.clickNextButton(document);
+          if (clicked) {
+            waitForNewQuestionAndAnalyze();
+          } else {
+            console.log("[MCQ AI] Auto-pilot stopped: No Next button found.");
+          }
+        }, 150); // Small delay after closing sidebar
+      }, 1500); // 1.5-second delay to allow app to save answer/enable next button
+    }
+
+    // 5. Show result in sidebar
     SidebarUI.showResult({
       question:    mcq.question,
       options:     mcq.options,
