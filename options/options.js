@@ -12,6 +12,7 @@ const DEFAULT_CONFIG = {
   highlightColor:          "#22c55e",
   autoCloseFloatingPanel:  true,
   autoClickNext:           false,
+  autoClickDelay:          1500,
   primaryStrategy:         "classNameHeuristics",
 };
 
@@ -29,6 +30,7 @@ const fields = {
   highlightHex:     $("highlight-hex"),
   autocloseToggle:  $("autoclose-toggle"),
   autoclickNextToggle: $("autoclick-next-toggle"),
+  autoclickDelayInput: $("autoclick-delay-input"),
   strategySelect:   $("strategy-select"),
 };
 
@@ -59,6 +61,7 @@ function populateForm(cfg) {
   fields.highlightHex.value    = cfg.highlightColor;
   fields.autocloseToggle.checked  = cfg.autoCloseFloatingPanel;
   if (fields.autoclickNextToggle) fields.autoclickNextToggle.checked = !!cfg.autoClickNext;
+  if (fields.autoclickDelayInput) fields.autoclickDelayInput.value = (cfg.autoClickDelay || 1500) / 1000;
   fields.strategySelect.value  = cfg.primaryStrategy || "classNameHeuristics";
 }
 
@@ -140,6 +143,7 @@ async function saveSettings() {
     highlightColor:         validHex,
     autoCloseFloatingPanel: fields.autocloseToggle.checked,
     autoClickNext:          fields.autoclickNextToggle ? fields.autoclickNextToggle.checked : false,
+    autoClickDelay:         fields.autoclickDelayInput ? Math.round(parseFloat(fields.autoclickDelayInput.value) * 1000) : 1500,
     primaryStrategy:        fields.strategySelect.value,
   };
 

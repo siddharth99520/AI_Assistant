@@ -23,6 +23,7 @@ export const DEFAULT_CONFIG = {
   // UI
   autoCloseFloatingPanel: true,
   autoClickNext: false,
+  autoClickDelay: 1500,
   highlightCorrectOption: true,
   highlightColor: "#22c55e",   // Tailwind green-500
   errorColor: "#ef4444",
