@@ -477,7 +477,7 @@ const SidebarUI = (() => {
   function open() {
     if (!host) return;
     isOpen = true;
-    _getSidebar().style.transform = "translateX(0)";
+    shadow.getElementById("sb-wrapper").style.transform = "translateX(0)";
     _getTab().setAttribute("data-open", "true");
     _getTab().title = "Close AI Assistant";
   }
@@ -485,7 +485,7 @@ const SidebarUI = (() => {
   function close() {
     if (!host) return;
     isOpen = false;
-    _getSidebar().style.transform = `translateX(${SIDEBAR_W}px)`;
+    shadow.getElementById("sb-wrapper").style.transform = `translateX(${SIDEBAR_W}px)`;
     _getTab().removeAttribute("data-open");
     _getTab().title = "Open AI Assistant (Ctrl+Shift+A)";
     // Reset to idle so stale results never show on next open
@@ -514,16 +514,18 @@ const SidebarUI = (() => {
     shadow.innerHTML = `
       <style>${_styles()}</style>
 
-      <!-- Toggle Tab (always visible) -->
-      <button class="sb-tab" id="sb-tab" title="Open AI Assistant (Ctrl+Shift+A)">
-        <span class="tab-icon">🤖</span>
-        <span class="tab-label">AI</span>
-      </button>
+      <div id="sb-wrapper" style="transform: translateX(${SIDEBAR_W}px)">
+        <!-- Toggle Tab (always visible) -->
+        <button class="sb-tab" id="sb-tab" title="Open AI Assistant (Ctrl+Shift+A)">
+          <span class="tab-icon">🤖</span>
+          <span class="tab-label">AI</span>
+        </button>
 
-      <!-- Sidebar Panel (slides in/out) -->
-      <div class="sidebar" id="sb-panel" style="transform: translateX(${SIDEBAR_W}px)">
-        <div class="panel-inner" id="sb-panel-content">
-          <!-- populated by showIdle / showLoading / showResult / showError -->
+        <!-- Sidebar Panel (slides in/out) -->
+        <div class="sidebar" id="sb-panel">
+          <div class="panel-inner" id="sb-panel-content">
+            <!-- populated by showIdle / showLoading / showResult / showError -->
+          </div>
         </div>
       </div>
     `;
@@ -574,6 +576,17 @@ const SidebarUI = (() => {
       @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
 
       *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+      /* ── Wrapper ── */
+      #sb-wrapper {
+        position: absolute;
+        top: 0;
+        right: 0;
+        width: 100%;
+        height: 100%;
+        pointer-events: none;
+        transition: transform 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+      }
 
       /* ── Toggle Tab ── */
       .sb-tab {
@@ -628,7 +641,6 @@ const SidebarUI = (() => {
         display: flex;
         flex-direction: column;
         pointer-events: all;
-        transition: transform 0.35s cubic-bezier(0.4, 0, 0.2, 1);
         overflow: hidden;
       }
 
@@ -988,6 +1000,7 @@ async function runAnalysis(sendResponse) {
 
     // 4. Auto-click next button if configured
     if (cfg.autoClickNext) {
+      const delayMs = cfg.autoClickDelay || 1500;
       setTimeout(() => {
         SidebarUI.close(); // Hide sidebar to prevent any overlay overlap issues
         setTimeout(() => {
@@ -998,7 +1011,7 @@ async function runAnalysis(sendResponse) {
             console.log("[MCQ AI] Auto-pilot stopped: No Next button found.");
           }
         }, 150); // Small delay after closing sidebar
-      }, 1500); // 1.5-second delay to allow app to save answer/enable next button
+      }, delayMs);
     }
 
     // 5. Show result in sidebar
