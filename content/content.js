@@ -372,12 +372,14 @@ const SidebarUI = (() => {
   let host       = null;
   let shadow     = null;
   let isOpen     = false;
-  let onAnalyse  = null; // callback set by main code
+  let onAnalyse  = null; 
+  let onSolveCode = null;
 
   // ── Public API ─────────────────────────────────────────────────────────────
 
-  function init(analyseCallback) {
+  function init(analyseCallback, solveCodeCallback) {
     onAnalyse = analyseCallback;
+    onSolveCode = solveCodeCallback;
     if (document.getElementById(HOST_ID)) return; // already mounted
     _mount();
   }
@@ -410,14 +412,20 @@ const SidebarUI = (() => {
           <button class="sb-close" id="sb-close">✕</button>
         </div>
         <div class="sb-body">
-          <p class="idle-text">Ready to analyse the current MCQ on this page.</p>
-          <button class="btn-analyse" id="sb-analyse-btn">✨ Analyse MCQ</button>
-          <p class="shortcut-hint">or press <kbd>Ctrl+Shift+A</kbd></p>
+          <p class="idle-text">Ready to analyse the current question on this page.</p>
+          <div style="display: flex; gap: 8px; width: 100%; margin-bottom: 8px;">
+            <button class="btn-analyse" id="sb-analyse-btn" style="flex: 1; padding: 12px 0;">✨ Solve MCQ</button>
+            <button class="btn-analyse" id="sb-code-btn" style="flex: 1; padding: 12px 0; background: linear-gradient(135deg, #3b82f6, #2563eb);">💻 Solve Code</button>
+          </div>
+          <p class="shortcut-hint">or press <kbd>Ctrl+Shift+A</kbd> for MCQ</p>
         </div>
       </div>`);
     _bindClose();
     shadow.getElementById("sb-analyse-btn")?.addEventListener("click", () => {
       if (onAnalyse) onAnalyse();
+    });
+    shadow.getElementById("sb-code-btn")?.addEventListener("click", () => {
+      if (onSolveCode) onSolveCode();
     });
   }
 
@@ -875,7 +883,7 @@ const SidebarUI = (() => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 // Mount sidebar as soon as the script loads
-SidebarUI.init(runAnalysis);
+SidebarUI.init(runAnalysis, runCodingAnalysis);
 
 // Listen for messages from popup / service worker / keyboard shortcut
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
@@ -1035,3 +1043,86 @@ async function runAnalysis(sendResponse) {
 }
 
 console.info("[MCQ AI Assistant v2] Sidebar content script loaded.");
+
+// ── Coding Feature Logic ────────────────────────────────────────────────────
+
+async function runCodingAnalysis() {
+  SidebarUI.open();
+  SidebarUI.showLoading();
+
+  if (!isContextValid()) {
+    SidebarUI.showError("Extension was reloaded.", "Please refresh this page.");
+    return;
+  }
+
+  try {
+    const problemText = extractCodingProblem();
+    if (!problemText || problemText.length < 50) {
+      SidebarUI.showError("Could not detect coding problem.", "Try highlighting the problem text and click Solve Code again.");
+      return;
+    }
+
+    const response = await chrome.runtime.sendMessage({
+      action: "CALL_GEMINI_CODE",
+      payload: { problemText }
+    });
+
+    if (!response?.ok) {
+      SidebarUI.showError("Gemini API Error", response?.error || "Unknown error.");
+      return;
+    }
+
+    SidebarUI.showIdle(); // Reset UI
+    console.log("[MCQ AI] Received Code from Gemini:", response.code);
+    injectCodeToIDE(response.code);
+
+  } catch (err) {
+    SidebarUI.showError(err.message || "Unexpected error.");
+  }
+}
+
+function extractCodingProblem() {
+  const selection = window.getSelection().toString().trim();
+  if (selection) return selection;
+  
+  // Clone body, remove editor to avoid reading code/boilerplate as problem
+  const clonedBody = document.body.cloneNode(true);
+  const editors = clonedBody.querySelectorAll('.ace_editor, .editor-container, testtaking-footer');
+  editors.forEach(e => e.remove());
+  
+  return clonedBody.innerText;
+}
+
+function injectCodeToIDE(code) {
+  // 1. Select Java language
+  const langDropdown = document.querySelector('app-language-dropdown .mydropdown');
+  if (langDropdown) {
+    langDropdown.click();
+    setTimeout(() => {
+      // Find the dropdown list and click Java
+      const listItems = document.querySelectorAll('app-language-dropdown span, app-language-dropdown div');
+      for (let item of listItems) {
+        if (item.innerText && item.innerText.toLowerCase().includes('java')) {
+          item.click();
+          break;
+        }
+      }
+    }, 200);
+  }
+
+  // 2. Inject into Ace Editor
+  setTimeout(() => {
+    const aceInput = document.querySelector('textarea.ace_text-input');
+    if (aceInput) {
+      aceInput.focus();
+      // Select all (Ctrl+A) and Delete
+      aceInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'a', ctrlKey: true, bubbles: true }));
+      aceInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'Backspace', bubbles: true }));
+      // Insert new code
+      document.execCommand('insertText', false, code);
+    } else {
+      console.warn("[MCQ AI] Ace editor textarea not found.");
+      alert("Could not find the Ace Editor to paste code.");
+    }
+  }, 600);
+}

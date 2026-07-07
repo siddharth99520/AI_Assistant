@@ -13,7 +13,8 @@
 
 import { loadConfig }                from "../shared/config.js";
 import { askOllama, pingOllama }     from "../shared/ollama-client.js";
-import { buildMCQPrompt, parseAnswerIndex, indexToLetter } from "../shared/prompt-builder.js";
+import { callGemini }                from "../shared/gemini-client.js";
+import { buildMCQPrompt, parseAnswerIndex, indexToLetter, buildCodingPrompt } from "../shared/prompt-builder.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Message Router
@@ -30,11 +31,36 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     return true;
   }
 
+  if (msg.action === "CALL_GEMINI_CODE") {
+    handleCallGeminiCode(msg.payload, sendResponse);
+    return true;
+  }
+
   if (msg.action === "GET_CONFIG") {
     loadConfig().then(sendResponse);
     return true;
   }
 });
+
+async function handleCallGeminiCode(payload, sendResponse) {
+  try {
+    const cfg = await loadConfig();
+    const { problemText } = payload;
+    
+    console.log("[SW] Building Coding Prompt for problem length:", problemText.length);
+    const prompt = buildCodingPrompt(problemText);
+    
+    console.log("[SW] Calling Gemini API...");
+    const rawCode = await callGemini(prompt, cfg);
+    
+    console.log("[SW] Gemini returned code of length:", rawCode.length);
+    
+    sendResponse({ ok: true, code: rawCode });
+  } catch (err) {
+    console.error("[SW] handleCallGeminiCode Error:", err);
+    sendResponse({ ok: false, error: err.message || String(err) });
+  }
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Toolbar icon click → toggle sidebar (popup is removed; icon click = sidebar)
