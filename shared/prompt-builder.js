@@ -70,3 +70,21 @@ export function parseAnswerIndex(rawResponse, totalOptions) {
 export function indexToLetter(idx) {
   return String.fromCharCode("A".charCodeAt(0) + idx);
 }
+
+/**
+ * Builds the prompt for a coding problem to be sent to Gemini.
+ */
+export function buildCodingPrompt(problemDescription) {
+  return `You are an expert Java programmer. 
+Solve the following coding problem.
+
+CRITICAL INSTRUCTIONS:
+1. Provide ONLY the raw Java code. 
+2. Do NOT wrap the code in markdown blocks (e.g. \`\`\`java). 
+3. Do NOT provide any explanations, boilerplate text outside the code, or markdown formatting.
+4. Do NOT include any comments (like // or /* */) inside the code. 
+5. If there is a specific class name required (like "Main" or "Solution"), ensure it is used, otherwise use "Main".
+
+PROBLEM STATEMENT:
+${problemDescription}`;
+}

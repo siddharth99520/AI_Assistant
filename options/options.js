@@ -20,6 +20,8 @@ const DEFAULT_CONFIG = {
 const $ = (id) => document.getElementById(id);
 
 const fields = {
+  geminiApiKey:     $("gemini-api-key"),
+  geminiModel:      $("gemini-model"),
   ollamaUrl:        $("ollama-url"),
   ollamaModel:      $("ollama-model"),
   reqTimeout:       $("req-timeout"),
@@ -51,6 +53,10 @@ async function loadConfig() {
 }
 
 function populateForm(cfg) {
+  if (!cfg) cfg = DEFAULT_CONFIG;
+
+  if (fields.geminiApiKey) fields.geminiApiKey.value = cfg.geminiApiKey || "";
+  if (fields.geminiModel) fields.geminiModel.value = cfg.geminiModel || "gemini-2.5-flash";
   fields.ollamaUrl.value       = cfg.ollamaBaseUrl;
   fields.ollamaModel.value     = cfg.ollamaModel;
   fields.reqTimeout.value      = cfg.requestTimeoutMs;
@@ -134,6 +140,8 @@ async function saveSettings() {
   const validHex = /^#[0-9a-fA-F]{6}$/.test(hexValue) ? hexValue : DEFAULT_CONFIG.highlightColor;
 
   const config = {
+    geminiApiKey:           fields.geminiApiKey ? fields.geminiApiKey.value.trim() : "",
+    geminiModel:            fields.geminiModel ? fields.geminiModel.value : "gemini-2.5-flash",
     ollamaBaseUrl:          fields.ollamaUrl.value.trim()   || DEFAULT_CONFIG.ollamaBaseUrl,
     ollamaModel:            fields.ollamaModel.value.trim() || DEFAULT_CONFIG.ollamaModel,
     requestTimeoutMs:       Number(fields.reqTimeout.value) || DEFAULT_CONFIG.requestTimeoutMs,

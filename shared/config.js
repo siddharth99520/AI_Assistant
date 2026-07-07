@@ -4,8 +4,12 @@
  */
 
 export const DEFAULT_CONFIG = {
-  ollamaBaseUrl: "http://localhost:11434",
-  ollamaModel: "gemma3:4b",
+  // AI Settings
+  aiProvider:              "ollama", // "ollama" | "gemini"
+  geminiApiKey:            "",
+  geminiModel:             "gemini-2.5-flash",
+  ollamaBaseUrl:           "http://localhost:11434",
+  ollamaModel:             "gemma3:4b",
   requestTimeoutMs: 30_000,
   temperature: 0.1,          // Low temp → deterministic, factual answers
   maxTokens: 512,
