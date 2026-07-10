@@ -188,3 +188,4 @@ MIT — free to use, modify, and distribute.
 - `6d901e1` feat: init MV3 extension scaffold, manifest and icons
 - `8521251` feat: add shared modules - config, Ollama client and prompt builder
 - `8fecd2c` feat: add content scripts, background service worker, popup and options UI
+- `dec9e52` feat: replace floating popup with fullscreen-safe sidebar + keyboard shortcuts (Ctrl+Shift+A / Ctrl+Shift+S)
