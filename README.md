@@ -200,3 +200,4 @@ MIT — free to use, modify, and distribute.
 - `5bc44b5` fix(ui): animate sidebar toggle tab with panel to prevent floating in center
 - `01387bc` feat(options): add configurable auto-pilot delay setting
 - `6222c3f` feat: add Gemini client, configuration and prompts
+- `884ef6a` feat: integrate Gemini coding assistant into UI and service worker
