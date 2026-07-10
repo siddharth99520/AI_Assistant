@@ -194,3 +194,4 @@ MIT — free to use, modify, and distribute.
 - `4b46dba` chore: update default Ollama model to gemma3:4b
 - `2f7039b` fix: resolve sidebar auto-close and stale DOM extraction bugs
 - `974e304` feat(popup): add quick model switcher dropdown in footer
+- `17dfeec` feat(options): add autocomplete datalist for model selection
