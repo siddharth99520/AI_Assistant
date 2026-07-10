@@ -191,3 +191,4 @@ MIT — free to use, modify, and distribute.
 - `dec9e52` feat: replace floating popup with fullscreen-safe sidebar + keyboard shortcuts (Ctrl+Shift+A / Ctrl+Shift+S)
 - `efb5d9d` fix: handle HTTP 403 CORS block from Ollama with actionable error message
 - `a583341` fix: detect Extension context invalidated and prompt user to refresh page
+- `4b46dba` chore: update default Ollama model to gemma3:4b
