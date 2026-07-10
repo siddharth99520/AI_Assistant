@@ -197,3 +197,4 @@ MIT — free to use, modify, and distribute.
 - `17dfeec` feat(options): add autocomplete datalist for model selection
 - `e7c765f` feat(options): add auto-pilot mode toggle and config
 - `ab3a74a` feat(content): implement continuous auto-pilot to click next and analyze automatically
+- `5bc44b5` fix(ui): animate sidebar toggle tab with panel to prevent floating in center
