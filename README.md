@@ -186,3 +186,4 @@ MIT — free to use, modify, and distribute.
 ## 📝 Changelog
 
 - `6d901e1` feat: init MV3 extension scaffold, manifest and icons
+- `8521251` feat: add shared modules - config, Ollama client and prompt builder
