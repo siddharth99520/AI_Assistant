@@ -189,3 +189,4 @@ MIT — free to use, modify, and distribute.
 - `8521251` feat: add shared modules - config, Ollama client and prompt builder
 - `8fecd2c` feat: add content scripts, background service worker, popup and options UI
 - `dec9e52` feat: replace floating popup with fullscreen-safe sidebar + keyboard shortcuts (Ctrl+Shift+A / Ctrl+Shift+S)
+- `efb5d9d` fix: handle HTTP 403 CORS block from Ollama with actionable error message
