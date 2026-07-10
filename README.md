@@ -195,3 +195,4 @@ MIT — free to use, modify, and distribute.
 - `2f7039b` fix: resolve sidebar auto-close and stale DOM extraction bugs
 - `974e304` feat(popup): add quick model switcher dropdown in footer
 - `17dfeec` feat(options): add autocomplete datalist for model selection
+- `e7c765f` feat(options): add auto-pilot mode toggle and config
