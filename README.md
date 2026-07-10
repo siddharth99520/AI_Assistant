@@ -193,3 +193,4 @@ MIT — free to use, modify, and distribute.
 - `a583341` fix: detect Extension context invalidated and prompt user to refresh page
 - `4b46dba` chore: update default Ollama model to gemma3:4b
 - `2f7039b` fix: resolve sidebar auto-close and stale DOM extraction bugs
+- `974e304` feat(popup): add quick model switcher dropdown in footer
