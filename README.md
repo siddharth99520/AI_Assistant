@@ -199,3 +199,4 @@ MIT — free to use, modify, and distribute.
 - `ab3a74a` feat(content): implement continuous auto-pilot to click next and analyze automatically
 - `5bc44b5` fix(ui): animate sidebar toggle tab with panel to prevent floating in center
 - `01387bc` feat(options): add configurable auto-pilot delay setting
+- `6222c3f` feat: add Gemini client, configuration and prompts
