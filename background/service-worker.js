@@ -2,9 +2,9 @@
  * service-worker.js — Background service worker (Manifest V3).
  *
  * Responsibilities:
- *  - Handles "CALL_OLLAMA" messages from content scripts
+ *  - Handles "CALL_OLLAMA" messages from content scripts (provider-agnostic)
+ *  - Routes MCQ solving to Gemini or Ollama based on cfg.aiProvider
  *  - Loads config from chrome.storage.sync
- *  - Calls Ollama API (fetch is available in service workers)
  *  - Parses response and returns { answerIndex, answerLetter }
  *  - Handles toolbar icon click → opens sidebar on active tab
  *  - Handles keyboard shortcuts (Ctrl+Shift+A and Ctrl+Shift+S)
@@ -15,14 +15,15 @@ import { loadConfig }                from "../shared/config.js";
 import { askOllama, pingOllama }     from "../shared/ollama-client.js";
 import { callGemini }                from "../shared/gemini-client.js";
 import { buildMCQPrompt, parseAnswerIndex, indexToLetter, buildCodingPrompt } from "../shared/prompt-builder.js";
+import { logger }                    from "../shared/logger.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Message Router
 // ─────────────────────────────────────────────────────────────────────────────
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
-  if (msg.action === "CALL_OLLAMA") {
-    handleCallOllama(msg.payload, sendResponse);
+  if (msg.action === "CALL_OLLAMA" || msg.action === "SOLVE_MCQ") {
+    handleSolveMCQ(msg.payload, sendResponse);
     return true; // async
   }
 
@@ -40,24 +41,60 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     loadConfig().then(sendResponse);
     return true;
   }
+
+  if (msg.action === "OPEN_OPTIONS_PAGE") {
+    chrome.runtime.openOptionsPage();
+    sendResponse({ ok: true });
+  }
+
+  if (msg.action === "LOG") {
+    const { level, context, message, details } = msg;
+    if (level === "ERROR") {
+      logger.error(context, message, details);
+    } else if (level === "WARN") {
+      logger.warn(context, message, details);
+    } else {
+      logger.info(context, message, details);
+    }
+    // sendResponse is not strictly needed for fire-and-forget logging
+  }
 });
 
 async function handleCallGeminiCode(payload, sendResponse) {
   try {
     const cfg = await loadConfig();
-    const { problemText } = payload;
-    
-    console.log("[SW] Building Coding Prompt for problem length:", problemText.length);
-    const prompt = buildCodingPrompt(problemText);
-    
-    console.log("[SW] Calling Gemini API...");
-    const rawCode = await callGemini(prompt, cfg);
-    
-    console.log("[SW] Gemini returned code of length:", rawCode.length);
-    
-    sendResponse({ ok: true, code: rawCode });
+    const { problemText, language = "Java", tabId } = payload;
+    const provider = cfg.codingProvider || cfg.aiProvider || "gemini";
+
+    logger.info("SW", `Building Coding Prompt | Provider: ${provider} | Language: ${language} | Problem length: ${problemText.length}`);
+    const prompt = buildCodingPrompt(problemText, language);
+
+    let rawCode;
+    if (provider === "ollama") {
+      logger.info("SW", "Calling Ollama for coding...");
+      rawCode = await askOllama(prompt, cfg);
+    } else {
+      if (!cfg.geminiApiKey) {
+        sendResponse({ ok: false, error: "Gemini API key is not set. Go to Settings and add your key." });
+        return;
+      }
+      logger.info("SW", "Calling Gemini API for coding...");
+      rawCode = await callGemini(prompt, cfg, (attempt, waitMs) => {
+        const waitSec = Math.ceil(waitMs / 1000);
+        logger.warn("SW", `Gemini coding 429 — retry ${attempt} in ${waitSec}s`);
+        if (tabId) {
+          chrome.tabs.sendMessage(tabId, {
+            action: "GEMINI_RETRY",
+            attempt, waitSec, context: "coding",
+          }).catch(() => {});
+        }
+      });
+    }
+
+    logger.info("SW", "Coding provider returned code of length:", rawCode.length);
+    sendResponse({ ok: true, code: rawCode, language });
   } catch (err) {
-    console.error("[SW] handleCallGeminiCode Error:", err);
+    logger.error("SW", "handleCallGeminiCode Error:", err);
     sendResponse({ ok: false, error: err.message || String(err) });
   }
 }
@@ -85,13 +122,28 @@ chrome.commands.onCommand.addListener(async (command) => {
   await _ensureContentScript(tab.id);
 
   if (command === "analyse-mcq") {
-    console.info("[SW] Keyboard shortcut: analyse-mcq");
+    logger.info("SW", "Keyboard shortcut: analyse-mcq");
     chrome.tabs.sendMessage(tab.id, { action: "ANALYSE_MCQ" }).catch(() => {});
   }
 
   if (command === "toggle-sidebar") {
-    console.info("[SW] Keyboard shortcut: toggle-sidebar");
+    logger.info("SW", "Keyboard shortcut: toggle-sidebar");
     chrome.tabs.sendMessage(tab.id, { action: "TOGGLE_SIDEBAR" }).catch(() => {});
+  }
+
+  if (command === "solve-code") {
+    logger.info("SW", "Keyboard shortcut: solve-code");
+    chrome.tabs.sendMessage(tab.id, { action: "SOLVE_CODE" }).catch(() => {});
+  }
+
+  if (command === "toggle-autopilot") {
+    logger.info("SW", "Keyboard shortcut: toggle-autopilot");
+    chrome.tabs.sendMessage(tab.id, { action: "TOGGLE_AUTOPILOT" }).catch(() => {});
+  }
+
+  if (command === "rapid-fire") {
+    logger.info("SW", "Keyboard shortcut: rapid-fire");
+    chrome.tabs.sendMessage(tab.id, { action: "TOGGLE_RAPID_FIRE" }).catch(() => {});
   }
 });
 
@@ -110,15 +162,44 @@ async function _ensureContentScript(tabId) {
 // Handlers
 // ─────────────────────────────────────────────────────────────────────────────
 
-async function handleCallOllama(mcq, sendResponse) {
+/**
+ * Routes MCQ solving to Gemini or Ollama based on cfg.aiProvider.
+ */
+async function handleSolveMCQ(mcq, sendResponse) {
   try {
     const cfg    = await loadConfig();
     const prompt = buildMCQPrompt(mcq);
+    const provider = cfg.mcqProvider || cfg.aiProvider || "ollama";
 
-    console.info("[SW] Sending prompt to Ollama:\n", prompt);
+    let rawResponse;
 
-    const rawResponse = await askOllama(prompt, cfg);
-    console.info("[SW] Ollama raw response:", rawResponse);
+    if (provider === "gemini") {
+      if (!cfg.geminiApiKey) {
+        sendResponse({
+          success: false,
+          error: "Gemini API key is not set. Go to Settings and add your key, or switch provider to Ollama.",
+        });
+        return;
+      }
+      logger.info("SW", "Routing MCQ to Gemini...");
+      rawResponse = await callGemini(prompt, cfg, async (attempt, waitMs) => {
+        const waitSec = Math.ceil(waitMs / 1000);
+        logger.warn("SW", `Gemini MCQ 429 — retry ${attempt}/${3} in ${waitSec}s`);
+        // Notify the active tab so the sidebar can show a countdown
+        const [tab] = await chrome.tabs.query({ active: true, currentWindow: true }).catch(() => [null]);
+        if (tab?.id) {
+          chrome.tabs.sendMessage(tab.id, {
+            action: "GEMINI_RETRY",
+            attempt, waitSec, context: "mcq",
+          }).catch(() => {});
+        }
+      });
+      logger.info("SW", "Gemini raw response:", rawResponse);
+    } else {
+      logger.info("SW", "Routing MCQ to Ollama...");
+      rawResponse = await askOllama(prompt, cfg);
+      logger.info("SW", "Ollama raw response:", rawResponse);
+    }
 
     const answerIndex  = parseAnswerIndex(rawResponse, mcq.options.length);
     const answerLetter = answerIndex !== null ? indexToLetter(answerIndex) : "?";
@@ -133,7 +214,7 @@ async function handleCallOllama(mcq, sendResponse) {
 
     sendResponse({ success: true, answerIndex, answerLetter, rawResponse, cfg });
   } catch (err) {
-    console.error("[SW] handleCallOllama error:", err);
+    logger.error("SW", "handleSolveMCQ error:", err);
     sendResponse({ success: false, error: err.message || "Unknown error in service worker." });
   }
 }
@@ -148,4 +229,4 @@ async function handlePingOllama(sendResponse) {
   }
 }
 
-console.info("[MCQ AI Assistant v2] Service worker started. Keyboard shortcuts: Ctrl+Shift+A (analyse), Ctrl+Shift+S (sidebar).");
+logger.info("SW", "[MCQ AI Assistant v2] Service worker started. Keyboard shortcuts: Ctrl+Shift+A (analyse), Ctrl+Shift+S (sidebar), Ctrl+Shift+C (solve code), Ctrl+Shift+X (toggle autopilot).");

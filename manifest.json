@@ -6,8 +6,8 @@
   "commands": {
     "analyse-mcq": {
       "suggested_key": {
-        "default": "Ctrl+Shift+A",
-        "mac": "Command+Shift+A"
+        "default": "Ctrl+Shift+M",
+        "mac": "Command+Shift+M"
       },
       "description": "Analyse the current MCQ and auto-select answer"
     },
@@ -17,6 +17,20 @@
         "mac": "Command+Shift+S"
       },
       "description": "Toggle the AI Assistant sidebar"
+    },
+    "solve-code": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+K",
+        "mac": "Command+Shift+K"
+      },
+      "description": "Solve coding problem with AI"
+    },
+    "toggle-autopilot": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+X",
+        "mac": "Command+Shift+X"
+      },
+      "description": "Toggle Auto-Pilot mode on/off"
     }
   },
   "permissions": [

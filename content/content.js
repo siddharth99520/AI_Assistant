@@ -12,6 +12,19 @@
  *  - Press Ctrl+Shift+A (keyboard shortcut via manifest command)
  *  - Click "Analyse" button inside the sidebar
  */
+// ─────────────────────────────────────────────────────────────────────────────
+// The content script runs in an isolated world but shares the DOM.
+// We cannot easily import ES modules directly due to Manifest V3 limitations
+// without setting `type: module` in manifest (which has scoping side effects).
+// Since content.js doesn't use `import`, we'll implement a tiny inline logger
+// that sends logs to the service worker via messaging to be stored.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const Logger = {
+  info: (msg, details) => chrome.runtime.sendMessage({ action: "LOG", level: "INFO", context: "Content", message: msg, details }),
+  warn: (msg, details) => chrome.runtime.sendMessage({ action: "LOG", level: "WARN", context: "Content", message: msg, details }),
+  error: (msg, details) => chrome.runtime.sendMessage({ action: "LOG", level: "ERROR", context: "Content", message: msg, details })
+};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // DOM Extractor — inline IIFE (content scripts can't use ES module imports)
@@ -324,7 +337,7 @@ const AutoSelector = (() => {
 
   function triggerClick(el) {
     if (!el) return;
-    console.log("[MCQ AI] Auto-clicking next button:", el);
+    Logger.info("Auto-clicking next button:", el.tagName);
     el.click(); // Keep it simple, since manual .click() works perfectly
   }
 
@@ -354,7 +367,7 @@ const AutoSelector = (() => {
       return true;
     }
     
-    console.log("[MCQ AI] Could not find a visible 'Next' button to click.");
+    Logger.info("Could not find a visible 'Next' button to click.");
     return false;
   }
 
@@ -374,17 +387,19 @@ const SidebarUI = (() => {
   let isOpen     = false;
   let onAnalyse  = null; 
   let onSolveCode = null;
+  let onRapidFire = null;
 
   // ── Public API ─────────────────────────────────────────────────────────────
 
-  function init(analyseCallback, solveCodeCallback) {
+  function init(analyseCallback, solveCodeCallback, rapidFireCallback) {
     onAnalyse = analyseCallback;
     onSolveCode = solveCodeCallback;
+    onRapidFire = rapidFireCallback;
     if (document.getElementById(HOST_ID)) return; // already mounted
     _mount();
   }
 
-  function showLoading() {
+  function showLoading(statusText = "Analysing with AI…", hintText = "Please wait") {
     _setPanel(`
       <div class="panel-inner">
         <div class="sb-header">
@@ -395,8 +410,8 @@ const SidebarUI = (() => {
         <div class="sb-body">
           <div class="loader">
             <div class="spinner"></div>
-            <p class="status-text">Analysing with AI…</p>
-            <p class="hint-text">Please wait</p>
+            <p class="status-text">${_esc(statusText)}</p>
+            <p class="hint-text">${_esc(hintText)}</p>
           </div>
         </div>
       </div>`);
@@ -417,6 +432,7 @@ const SidebarUI = (() => {
             <button class="btn-analyse" id="sb-analyse-btn" style="flex: 1; padding: 12px 0;">✨ Solve MCQ</button>
             <button class="btn-analyse" id="sb-code-btn" style="flex: 1; padding: 12px 0; background: linear-gradient(135deg, #3b82f6, #2563eb);">💻 Solve Code</button>
           </div>
+          <button class="btn-rapid-fire" id="sb-rapid-btn">⚡ Rapid Fire</button>
           <p class="shortcut-hint">or press <kbd>Ctrl+Shift+A</kbd> for MCQ</p>
         </div>
       </div>`);
@@ -426,6 +442,9 @@ const SidebarUI = (() => {
     });
     shadow.getElementById("sb-code-btn")?.addEventListener("click", () => {
       if (onSolveCode) onSolveCode();
+    });
+    shadow.getElementById("sb-rapid-btn")?.addEventListener("click", () => {
+      if (onRapidFire) onRapidFire();
     });
   }
 
@@ -559,10 +578,9 @@ const SidebarUI = (() => {
 
   function _setPanel(html) {
     const content = shadow.getElementById("sb-panel-content");
-    if (content) content.outerHTML = `<div class="panel-inner" id="sb-panel-content">${html}</div>`;
-    // Re-query after replace
-    const newContent = shadow.getElementById("sb-panel-content");
-    if (newContent) newContent.innerHTML = html;
+    // Set innerHTML directly — avoids double-render bug where outerHTML + innerHTML
+    // would nest the content inside itself, breaking button event listeners.
+    if (content) content.innerHTML = html;
   }
 
   function _bindClose() {
@@ -851,6 +869,139 @@ const SidebarUI = (() => {
       }
       .btn-again:hover { background: rgba(139,92,246,0.2); color: #c4b5fd; }
 
+      /* ── Rapid Fire button ── */
+      .btn-rapid-fire {
+        width: 100%;
+        padding: 11px;
+        border-radius: 12px;
+        border: none;
+        background: linear-gradient(135deg, #f59e0b, #ef4444);
+        color: #fff;
+        font-size: 13px;
+        font-weight: 600;
+        font-family: 'Inter', sans-serif;
+        cursor: pointer;
+        transition: all 0.25s;
+        box-shadow: 0 4px 15px rgba(245,158,11,0.4);
+        letter-spacing: 0.2px;
+      }
+      .btn-rapid-fire:hover {
+        transform: translateY(-1px);
+        box-shadow: 0 6px 22px rgba(245,158,11,0.55);
+      }
+      .btn-rapid-fire:active { transform: translateY(0); }
+
+      /* ── Rapid Fire live panel ── */
+      .rf-panel {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 16px;
+        padding: 20px 0;
+      }
+      .rf-bolt {
+        font-size: 48px;
+        animation: rf-pulse 0.6s ease-in-out infinite alternate;
+        filter: drop-shadow(0 0 16px rgba(245,158,11,0.7));
+      }
+      @keyframes rf-pulse {
+        from { transform: scale(1); opacity: 0.85; }
+        to   { transform: scale(1.15); opacity: 1; }
+      }
+      .rf-title {
+        font-size: 16px;
+        font-weight: 700;
+        color: #fbbf24;
+        text-transform: uppercase;
+        letter-spacing: 1.5px;
+      }
+      .rf-counter {
+        font-size: 36px;
+        font-weight: 800;
+        color: #f59e0b;
+        text-shadow: 0 0 20px rgba(245,158,11,0.5);
+        line-height: 1;
+      }
+      .rf-label {
+        font-size: 11px;
+        color: #64748b;
+        text-transform: uppercase;
+        letter-spacing: 0.8px;
+      }
+      .rf-stop {
+        width: 100%;
+        padding: 12px;
+        border-radius: 12px;
+        border: 1px solid rgba(239,68,68,0.5);
+        background: rgba(239,68,68,0.12);
+        color: #f87171;
+        font-size: 13px;
+        font-weight: 600;
+        font-family: 'Inter', sans-serif;
+        cursor: pointer;
+        transition: all 0.2s;
+      }
+      .rf-stop:hover { background: rgba(239,68,68,0.25); color: #fca5a5; }
+
+      /* ── Humanizer typing panel ── */
+      .hz-panel {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 14px;
+        padding: 20px 0;
+      }
+      .hz-cursor {
+        font-size: 40px;
+        animation: hz-blink 0.7s step-end infinite;
+        filter: drop-shadow(0 0 14px rgba(34,197,94,0.6));
+      }
+      @keyframes hz-blink {
+        50% { opacity: 0.3; }
+      }
+      .hz-title {
+        font-size: 14px;
+        font-weight: 700;
+        color: #4ade80;
+        letter-spacing: 0.5px;
+      }
+      .hz-progress-wrap {
+        width: 100%;
+        height: 6px;
+        background: rgba(255,255,255,0.06);
+        border-radius: 3px;
+        overflow: hidden;
+      }
+      .hz-progress-bar {
+        height: 100%;
+        width: 0%;
+        background: linear-gradient(90deg, #22c55e, #4ade80);
+        border-radius: 3px;
+        transition: width 0.15s ease;
+      }
+      .hz-stats {
+        font-size: 12px;
+        color: #64748b;
+      }
+      .hz-stats strong {
+        color: #4ade80;
+        font-size: 14px;
+      }
+      .hz-stop {
+        width: 100%;
+        padding: 10px;
+        border-radius: 10px;
+        border: 1px solid rgba(239,68,68,0.4);
+        background: rgba(239,68,68,0.08);
+        color: #f87171;
+        font-size: 12px;
+        font-weight: 600;
+        font-family: 'Inter', sans-serif;
+        cursor: pointer;
+        transition: all 0.2s;
+      }
+      .hz-stop:hover { background: rgba(239,68,68,0.2); color: #fca5a5; }
+
       /* ── Error ── */
       .err-msg {
         color: #f87171;
@@ -875,15 +1026,368 @@ const SidebarUI = (() => {
     `;
   }
 
-  return { init, open, close, toggle, showIdle, showLoading, showResult, showError };
+  function showRapidFire(count, onStop) {
+    _setPanel(`
+      <div class="panel-inner">
+        <div class="sb-header">
+          <span class="sb-logo">⚡</span>
+          <span class="sb-title" style="color: #fbbf24;">Rapid Fire</span>
+          <button class="sb-close" id="sb-close">✕</button>
+        </div>
+        <div class="sb-body">
+          <div class="rf-panel">
+            <div class="rf-bolt">⚡</div>
+            <div class="rf-title">Rapid Fire Active</div>
+            <div class="rf-counter" id="rf-count">${count}</div>
+            <div class="rf-label">questions answered</div>
+          </div>
+          <button class="rf-stop" id="rf-stop-btn">⏹ Stop Rapid Fire</button>
+        </div>
+      </div>`);
+    _bindClose();
+    shadow.getElementById("rf-stop-btn")?.addEventListener("click", () => {
+      if (onStop) onStop();
+    });
+  }
+
+  function updateRapidFireCount(count) {
+    const el = shadow?.getElementById("rf-count");
+    if (el) el.textContent = count;
+  }
+
+  function showHumanizing(totalChars, onStop) {
+    _setPanel(`
+      <div class="panel-inner">
+        <div class="sb-header">
+          <span class="sb-logo">⌨️</span>
+          <span class="sb-title" style="color: #4ade80;">Humanizer</span>
+          <button class="sb-close" id="sb-close">✕</button>
+        </div>
+        <div class="sb-body">
+          <div class="hz-panel">
+            <div class="hz-cursor">⌨️</div>
+            <div class="hz-title">Typing code…</div>
+            <div class="hz-progress-wrap">
+              <div class="hz-progress-bar" id="hz-bar"></div>
+            </div>
+            <div class="hz-stats">
+              <strong id="hz-typed">0</strong> / ${totalChars} chars
+            </div>
+          </div>
+          <button class="hz-stop" id="hz-stop-btn">⏹ Stop Typing</button>
+        </div>
+      </div>`);
+    _bindClose();
+    shadow.getElementById("hz-stop-btn")?.addEventListener("click", () => {
+      if (onStop) onStop();
+    });
+  }
+
+  function updateHumanizerProgress(typed, total) {
+    const bar = shadow?.getElementById("hz-bar");
+    const typedEl = shadow?.getElementById("hz-typed");
+    if (bar) bar.style.width = `${Math.round((typed / total) * 100)}%`;
+    if (typedEl) typedEl.textContent = typed;
+  }
+
+  return { init, open, close, toggle, showIdle, showLoading, showResult, showError, showRapidFire, updateRapidFireCount, showHumanizing, updateHumanizerProgress };
 })();
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Keyboard Shortcut Engine — loads user-configured keybindings from storage
+// ─────────────────────────────────────────────────────────────────────────────
+
+const DEFAULT_SHORTCUTS = {
+  solveMcq:        "Ctrl+Shift+M",   // In-page rebindable
+  toggleSidebar:   "Ctrl+Shift+S",   // Chrome command (manifest only)
+  solveCode:       "Ctrl+Shift+K",   // In-page rebindable
+  toggleAutoPilot: "Ctrl+Shift+X",   // Chrome command (manifest only)
+  rapidFire:       "Ctrl+Shift+F",   // Rapid Fire — random select + next
+  nextQuestion:    "Ctrl+Shift+N",
+  reAnalyse:       "Ctrl+Shift+R",
+  closeSidebar:    "Escape",
+  selectOptionA:   "Alt+A",
+  selectOptionB:   "Alt+B",
+  selectOptionC:   "Alt+C",
+  selectOptionD:   "Alt+D",
+  openSettings:    "Ctrl+Shift+P",
+  toggleHighlight: "Alt+H",
+  toggleStealth:   "Alt+S",   // Stealth mode — no sidebar popup
+};
+
+// Current active shortcuts (loaded from storage, fallback to defaults)
+let activeShortcuts = { ...DEFAULT_SHORTCUTS };
+// Session-level highlight override (null = use config value)
+let sessionHighlightOverride = null;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Stealth Mode — solve silently without opening the sidebar
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Session flag. Resets on page refresh. Persisted to sessionStorage so it
+ *  survives content-script re-injection within the same tab session. */
+let stealthMode = (() => {
+  try { return sessionStorage.getItem("mcq-ai-stealth") === "1"; }
+  catch { return false; }
+})();
+
+function _setStealthMode(value) {
+  stealthMode = value;
+  try { sessionStorage.setItem("mcq-ai-stealth", value ? "1" : "0"); }
+  catch { /* ignore */ }
+  _updateStealthTab();
+  const state = value ? "ON 👻" : "OFF 👁";
+  _showToastNotification(`Stealth ${state}`);
+  Logger.info(`Stealth mode: ${state}`);
+}
+
+/** Updates the sidebar tab icon/label to reflect stealth state. */
+function _updateStealthTab() {
+  const hostEl = document.getElementById("mcq-ai-sidebar-host");
+  if (!hostEl) return;
+  if (stealthMode) {
+    // Fully hide the entire sidebar host — tab + panel
+    hostEl.style.display = "none";
+  } else {
+    hostEl.style.display = "";
+    // Restore normal tab appearance
+    if (hostEl.shadowRoot) {
+      const tab = hostEl.shadowRoot.getElementById("sb-tab");
+      if (tab) {
+        tab.querySelector(".tab-icon").textContent = "🤖";
+        tab.querySelector(".tab-label").textContent = "AI";
+        tab.style.opacity = "";
+        tab.title = "Open AI Assistant (Ctrl+Shift+A)";
+      }
+    }
+  }
+}
+
+
+/**
+ * Load shortcuts from chrome.storage.sync and keep them in memory.
+ */
+function loadShortcuts() {
+  if (!isContextValid()) return;
+  try {
+    chrome.storage.sync.get({ shortcuts: DEFAULT_SHORTCUTS }, (data) => {
+      activeShortcuts = { ...DEFAULT_SHORTCUTS, ...(data.shortcuts || {}) };
+      Logger.info("Shortcuts loaded", activeShortcuts);
+    });
+  } catch { /* ignore if context invalidated */ }
+}
+
+// Load on init
+loadShortcuts();
+
+// Reload when storage changes (e.g. user saves new shortcuts from options page)
+try {
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area === "sync" && changes.shortcuts) {
+      activeShortcuts = { ...DEFAULT_SHORTCUTS, ...(changes.shortcuts.newValue || {}) };
+      Logger.info("Shortcuts updated from storage", activeShortcuts);
+    }
+  });
+} catch { /* ignore */ }
+
+/**
+ * Convert a KeyboardEvent into a normalised combo string like "Ctrl+Shift+A" or "Alt+H".
+ */
+function eventToCombo(e) {
+  const parts = [];
+  if (e.ctrlKey || e.metaKey) parts.push("Ctrl");
+  if (e.altKey) parts.push("Alt");
+  if (e.shiftKey) parts.push("Shift");
+
+  const key = e.key;
+  // Skip if key is undefined or only a modifier key was pressed
+  if (!key) return null;
+  if (["Control", "Alt", "Shift", "Meta"].includes(key)) return null;
+
+  if (key === "Escape") {
+    parts.length = 0; // Escape stands alone
+    parts.push("Escape");
+  } else {
+    parts.push(key.length === 1 ? key.toUpperCase() : key);
+  }
+
+  return parts.join("+");
+}
+
+/**
+ * Master keydown handler — matches pressed combo against active shortcuts.
+ */
+document.addEventListener("keydown", (e) => {
+  const combo = eventToCombo(e);
+  if (!combo) return;
+
+  // Find which action matches
+  const action = Object.entries(activeShortcuts).find(([, binding]) => binding === combo)?.[0];
+  if (!action) return;
+
+  // Chrome manifest commands (Ctrl+Shift+M/S/K/X) fire via service worker.
+  // We also handle solveMcq and solveCode here so they can be rebound from Settings.
+  // toggleSidebar and toggleAutoPilot are handled exclusively by the service worker.
+  const chromeOnlyCommands = ["toggleSidebar", "toggleAutoPilot"];
+  if (chromeOnlyCommands.includes(action)) return;
+
+  // Prevent default browser behaviour for our shortcuts
+  e.preventDefault();
+  e.stopPropagation();
+
+  Logger.info(`Shortcut fired: ${combo} → ${action}`);
+
+  switch (action) {
+    case "solveMcq":
+      SidebarUI.open();
+      runAnalysis();
+      break;
+
+    case "solveCode":
+      SidebarUI.open();
+      runCodingAnalysis();
+      break;
+
+    case "nextQuestion":
+      AutoSelector.clickNextButton(document);
+      break;
+
+    case "reAnalyse":
+      runAnalysis();
+      break;
+
+    case "closeSidebar":
+      SidebarUI.close();
+      break;
+
+    case "selectOptionA":
+      _quickSelect(0);
+      break;
+    case "selectOptionB":
+      _quickSelect(1);
+      break;
+    case "selectOptionC":
+      _quickSelect(2);
+      break;
+    case "selectOptionD":
+      _quickSelect(3);
+      break;
+
+    case "openSettings":
+      if (isContextValid()) {
+        chrome.runtime.sendMessage({ action: "OPEN_OPTIONS_PAGE" }).catch(() => {});
+      }
+      break;
+
+    case "toggleHighlight":
+      _toggleHighlightSession();
+      break;
+
+    case "toggleStealth":
+      _setStealthMode(!stealthMode);
+      break;
+
+    case "rapidFire":
+      toggleRapidFire();
+      break;
+  }
+}, true); // Use capture phase so we intercept before the page
+
+
+/**
+ * Quick-select an option by index (0=A, 1=B, 2=C, 3=D) with current config.
+ */
+function _quickSelect(index) {
+  const cfg = { highlightCorrectOption: true, highlightColor: "#22c55e" };
+  if (isContextValid()) {
+    chrome.runtime.sendMessage({ action: "GET_CONFIG" }, (remoteCfg) => {
+      if (remoteCfg) {
+        cfg.highlightCorrectOption = sessionHighlightOverride ?? remoteCfg.highlightCorrectOption;
+        cfg.highlightColor = remoteCfg.highlightColor || "#22c55e";
+      }
+      const result = AutoSelector.select(index, cfg, document);
+      const letter = String.fromCharCode(65 + index);
+      Logger.info(`Quick-select option ${letter}: ${result.success ? "✓" : "✗"}`);
+    });
+  } else {
+    AutoSelector.select(index, cfg, document);
+  }
+}
+
+/**
+ * Toggle highlight on/off for the current session.
+ */
+function _toggleHighlightSession() {
+  if (sessionHighlightOverride === null) {
+    // First toggle — disable it
+    sessionHighlightOverride = false;
+  } else {
+    sessionHighlightOverride = !sessionHighlightOverride;
+  }
+  const state = sessionHighlightOverride ? "ON" : "OFF";
+  console.info(`[MCQ AI] Highlight toggled: ${state}`);
+  // Show brief notification via sidebar
+  _showToastNotification(`Highlight ${state}`);
+}
+
+/**
+ * Shows a brief floating notification inside the sidebar area.
+ */
+function _showToastNotification(msg) {
+  // Use the sidebar's host shadow DOM if available
+  const hostEl = document.getElementById("mcq-ai-sidebar-host");
+  if (!hostEl || !hostEl.shadowRoot) return;
+
+  const shadow = hostEl.shadowRoot;
+  // Remove existing toast if any
+  shadow.getElementById("mcq-toast")?.remove();
+
+  const toast = document.createElement("div");
+  toast.id = "mcq-toast";
+  Object.assign(toast.style, {
+    position: "fixed",
+    bottom: "24px",
+    right: "24px",
+    background: "linear-gradient(135deg, #7c3aed, #4f46e5)",
+    color: "#fff",
+    padding: "10px 20px",
+    borderRadius: "12px",
+    fontSize: "13px",
+    fontWeight: "600",
+    fontFamily: "'Inter', sans-serif",
+    boxShadow: "0 8px 32px rgba(124,58,237,0.5)",
+    zIndex: "2147483647",
+    pointerEvents: "none",
+    opacity: "0",
+    transform: "translateY(10px)",
+    transition: "all 0.3s ease",
+  });
+  toast.textContent = msg;
+  shadow.appendChild(toast);
+
+  // Animate in
+  requestAnimationFrame(() => {
+    toast.style.opacity = "1";
+    toast.style.transform = "translateY(0)";
+  });
+
+  // Animate out
+  setTimeout(() => {
+    toast.style.opacity = "0";
+    toast.style.transform = "translateY(10px)";
+    setTimeout(() => toast.remove(), 300);
+  }, 1500);
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Main — Bootstrap sidebar & message listener
 // ─────────────────────────────────────────────────────────────────────────────
 
-// Mount sidebar as soon as the script loads
-SidebarUI.init(runAnalysis, runCodingAnalysis);
+// Mount sidebar and restore stealth tab state on init
+SidebarUI.init(runAnalysis, runCodingAnalysis, toggleRapidFire);
+// Restore stealth tab indicator if stealth was already active
+if (stealthMode) _updateStealthTab();
+
 
 // Listen for messages from popup / service worker / keyboard shortcut
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
@@ -896,10 +1400,63 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     SidebarUI.toggle();
     sendResponse({ ok: true });
   }
+  if (msg.action === "SOLVE_CODE") {
+    SidebarUI.open();
+    runCodingAnalysis();
+    sendResponse({ ok: true });
+  }
+  if (msg.action === "TOGGLE_AUTOPILOT") {
+    _handleToggleAutoPilot();
+    sendResponse({ ok: true });
+  }
+  if (msg.action === "TOGGLE_RAPID_FIRE") {
+    toggleRapidFire();
+    sendResponse({ ok: true });
+  }
   if (msg.action === "PING") {
     sendResponse({ alive: true });
   }
+  if (msg.action === "TOGGLE_STEALTH") {
+    _setStealthMode(!stealthMode);
+    sendResponse({ ok: true, stealth: stealthMode });
+  }
+  if (msg.action === "GEMINI_RETRY") {
+    // Show a countdown in the sidebar when Gemini 429s and auto-retries
+    const { attempt, waitSec, context } = msg;
+    const label = context === "coding" ? "Code solver" : "MCQ solver";
+    SidebarUI.open();
+    SidebarUI.showLoading(
+      `⏳ Rate limited by Gemini (429)`,
+      `${label} — retry ${attempt}/3 in ${waitSec} s…`
+    );
+    sendResponse({ ok: true });
+  }
 });
+
+/**
+ * Toggle auto-pilot mode from keyboard shortcut.
+ * Reads current config, flips autoClickNext, saves, and shows toast.
+ */
+async function _handleToggleAutoPilot() {
+  if (!isContextValid()) return;
+  try {
+    const cfg = await new Promise(resolve => {
+      chrome.runtime.sendMessage({ action: "GET_CONFIG" }, resolve);
+    });
+    const newValue = !cfg.autoClickNext;
+    await new Promise((resolve, reject) => {
+      chrome.storage.sync.set({ autoClickNext: newValue }, () => {
+        if (chrome.runtime.lastError) reject(chrome.runtime.lastError);
+        else resolve();
+      });
+    });
+    const state = newValue ? "ON 🚀" : "OFF ⏹";
+    Logger.info(`Auto-Pilot toggled: ${state}`);
+    _showToastNotification(`Auto-Pilot ${state}`);
+  } catch (err) {
+    Logger.error("Failed to toggle auto-pilot", err.message);
+  }
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Core analysis logic
@@ -924,7 +1481,7 @@ let lastAnalyzedQuestion = null;
 
 function waitForNewQuestionAndAnalyze() {
   let attempts = 0;
-  console.log("[MCQ AI] Auto-pilot: waiting for next question to load...");
+  Logger.info("Auto-pilot: waiting for next question to load...");
   
   const checkInterval = setInterval(() => {
     attempts++;
@@ -932,29 +1489,33 @@ function waitForNewQuestionAndAnalyze() {
     // Give up after 15 seconds (30 attempts * 500ms) or if extension context is lost
     if (!isContextValid() || attempts > 30) {
       clearInterval(checkInterval);
-      console.log("[MCQ AI] Auto-pilot stopped: timed out waiting for next question.");
+      Logger.warn("Auto-pilot stopped: timed out waiting for next question.");
       return;
     }
     
     const mcq = DOMExtractor.extract(document);
     if (mcq && mcq.question && mcq.question !== lastAnalyzedQuestion) {
       clearInterval(checkInterval);
-      console.log("[MCQ AI] Auto-pilot: new question detected. Starting analysis.");
+      Logger.info("Auto-pilot: new question detected. Starting analysis.");
       runAnalysis();
     }
   }, 500);
 }
 
 async function runAnalysis(sendResponse) {
-  SidebarUI.open();
-  SidebarUI.showLoading();
+  if (!stealthMode) {
+    SidebarUI.open();
+    SidebarUI.showLoading();
+  }
 
   // ── Guard: check if extension context is still alive ─────────────────────
   if (!isContextValid()) {
-    SidebarUI.showError(
-      "Extension was reloaded.",
-      "Please <b>refresh this page (F5)</b> to reconnect the AI Assistant."
-    );
+    if (!stealthMode) {
+      SidebarUI.showError(
+        "Extension was reloaded.",
+        "Please <b>refresh this page (F5)</b> to reconnect the AI Assistant."
+      );
+    }
     sendResponse?.({ success: false, error: "Extension context invalidated" });
     return;
   }
@@ -964,14 +1525,18 @@ async function runAnalysis(sendResponse) {
     const mcq = DOMExtractor.extract(document);
     if (!mcq) {
       const errMsg = "No MCQ detected. Make sure a question is visible on screen.";
-      SidebarUI.showError(errMsg, "Try clicking inside the question area, then press Ctrl+Shift+A again.");
+      if (!stealthMode) {
+        SidebarUI.showError(errMsg, "Try clicking inside the question area, then press Ctrl+Shift+A again.");
+      } else {
+        _showToastNotification("⚠ No MCQ found");
+      }
       sendResponse?.({ success: false, error: errMsg });
       return;
     }
-    
+
     lastAnalyzedQuestion = mcq.question;
 
-    // 2. Call Ollama via background service worker
+    // 2. Call AI via background service worker
     let response;
     try {
       response = await chrome.runtime.sendMessage({
@@ -979,21 +1544,26 @@ async function runAnalysis(sendResponse) {
         payload: mcq,
       });
     } catch (runtimeErr) {
-      // Specifically catch "Extension context invalidated" from chrome.runtime
       if (runtimeErr.message?.includes("Extension context invalidated") ||
           runtimeErr.message?.includes("context invalidated")) {
-        SidebarUI.showError(
-          "Extension was reloaded — context lost.",
-          "<b>Refresh this page (F5)</b> to reconnect the AI Assistant."
-        );
+        if (!stealthMode) {
+          SidebarUI.showError(
+            "Extension was reloaded — context lost.",
+            "<b>Refresh this page (F5)</b> to reconnect the AI Assistant."
+          );
+        }
         sendResponse?.({ success: false, error: "Extension context invalidated" });
         return;
       }
-      throw runtimeErr; // re-throw unexpected errors
+      throw runtimeErr;
     }
 
     if (!response?.success) {
-      SidebarUI.showError(response?.error || "Unknown error from Ollama.");
+      if (!stealthMode) {
+        SidebarUI.showError(response?.error || "Unknown error from AI provider.");
+      } else {
+        _showToastNotification(`⚠ ${(response?.error || "AI error").slice(0, 40)}`);
+      }
       sendResponse?.({ success: false, error: response?.error });
       return;
     }
@@ -1002,127 +1572,370 @@ async function runAnalysis(sendResponse) {
 
     // 3. Auto-select the answer in the DOM
     const cfg = response.cfg || { highlightCorrectOption: true, highlightColor: "#22c55e", autoClickNext: false };
+    if (sessionHighlightOverride !== null) {
+      cfg.highlightCorrectOption = sessionHighlightOverride;
+    }
+    // In stealth mode, suppress highlight glow so nothing visually stands out
+    if (stealthMode) cfg.highlightCorrectOption = false;
     AutoSelector.select(answerIndex, cfg, document);
 
-    console.log("[MCQ AI] Config loaded. autoClickNext is:", cfg.autoClickNext);
+    Logger.info(`Config loaded. autoClickNext is: ${cfg.autoClickNext}`);
 
-    // 4. Auto-click next button if configured
-    if (cfg.autoClickNext) {
-      const delayMs = cfg.autoClickDelay || 1500;
-      setTimeout(() => {
-        SidebarUI.close(); // Hide sidebar to prevent any overlay overlap issues
+    if (stealthMode) {
+      // Stealth: show a tiny, quick toast and move on
+      _showToastNotification(`✓ ${answerLetter}`);
+    } else {
+      // 4. Auto-click next button if configured
+      if (cfg.autoClickNext) {
+        const delayMs = cfg.autoClickDelay || 1500;
         setTimeout(() => {
-          const clicked = AutoSelector.clickNextButton(document);
-          if (clicked) {
-            waitForNewQuestionAndAnalyze();
-          } else {
-            console.log("[MCQ AI] Auto-pilot stopped: No Next button found.");
-          }
-        }, 150); // Small delay after closing sidebar
-      }, delayMs);
-    }
+          SidebarUI.close();
+          setTimeout(() => {
+            const clicked = AutoSelector.clickNextButton(document);
+            if (clicked) {
+              waitForNewQuestionAndAnalyze();
+            } else {
+              Logger.warn("Auto-pilot stopped: No Next button found.");
+            }
+          }, 150);
+        }, delayMs);
+      }
 
-    // 5. Show result in sidebar
-    SidebarUI.showResult({
-      question:    mcq.question,
-      options:     mcq.options,
-      answerIndex,
-      answerLetter,
-    });
+      // 5. Show result in sidebar
+      SidebarUI.showResult({
+        question:    mcq.question,
+        options:     mcq.options,
+        answerIndex,
+        answerLetter,
+      });
+    }
 
     sendResponse?.({ success: true, answerIndex, answerLetter });
 
   } catch (err) {
     const errMsg = err.message || "Unexpected error in content script.";
-    const hint = errMsg.includes("fetch") || errMsg.includes("network")
-      ? "Ollama may be down. Run: <code>$env:OLLAMA_ORIGINS='*'; ollama serve</code>"
-      : undefined;
-    SidebarUI.showError(errMsg, hint);
+    if (!stealthMode) {
+      const hint = errMsg.includes("fetch") || errMsg.includes("network")
+        ? "Ollama may be down. Run: <code>$env:OLLAMA_ORIGINS='*'; ollama serve</code>"
+        : undefined;
+      SidebarUI.showError(errMsg, hint);
+    } else {
+      _showToastNotification(`⚠ Error`);
+      Logger.error(`Stealth analysis error: ${errMsg}`);
+    }
     sendResponse?.({ success: false, error: errMsg });
   }
 }
 
-console.info("[MCQ AI Assistant v2] Sidebar content script loaded.");
+// ─────────────────────────────────────────────────────────────────────────────
+// Rapid Fire Mode — selects a random option, clicks Next, repeats
+// ─────────────────────────────────────────────────────────────────────────────
+
+let rapidFireActive = false;
+let rapidFireCount  = 0;
+let rapidFireTimer  = null;
+
+function toggleRapidFire() {
+  if (rapidFireActive) {
+    stopRapidFire();
+  } else {
+    startRapidFire();
+  }
+}
+
+function startRapidFire() {
+  rapidFireActive = true;
+  rapidFireCount  = 0;
+  Logger.info("⚡ Rapid Fire started");
+  _showToastNotification("⚡ Rapid Fire ON");
+  SidebarUI.open();
+  SidebarUI.showRapidFire(0, stopRapidFire);
+  _rapidFireStep();
+}
+
+function stopRapidFire() {
+  rapidFireActive = false;
+  if (rapidFireTimer) {
+    clearTimeout(rapidFireTimer);
+    rapidFireTimer = null;
+  }
+  Logger.info(`⏹ Rapid Fire stopped after ${rapidFireCount} questions`);
+  _showToastNotification(`⏹ Rapid Fire done — ${rapidFireCount} answered`);
+  SidebarUI.showIdle();
+}
+
+function _rapidFireStep() {
+  if (!rapidFireActive) return;
+
+  // 1. Extract MCQ to find how many options exist
+  const mcq = DOMExtractor.extract(document);
+  if (!mcq || !mcq.options || mcq.options.length < 2) {
+    // No question found — wait a bit and try again (page might be loading)
+    rapidFireTimer = setTimeout(() => _rapidFireStep(), 600);
+    return;
+  }
+
+  // 2. Pick a random option
+  const randomIdx = Math.floor(Math.random() * mcq.options.length);
+  const cfg = { highlightCorrectOption: false };
+  AutoSelector.select(randomIdx, cfg, document);
+  rapidFireCount++;
+  SidebarUI.updateRapidFireCount(rapidFireCount);
+  const letter = String.fromCharCode(65 + randomIdx);
+  Logger.info(`⚡ Rapid Fire #${rapidFireCount}: selected ${letter}`);
+
+  // 3. Click Next after a short delay, then wait for new question
+  rapidFireTimer = setTimeout(() => {
+    if (!rapidFireActive) return;
+    const clicked = AutoSelector.clickNextButton(document);
+    if (!clicked) {
+      Logger.warn("⚡ Rapid Fire: no Next button found, stopping.");
+      stopRapidFire();
+      return;
+    }
+    // 4. Wait for next question to load, then repeat
+    _waitForNextQuestionRapidFire(mcq.question);
+  }, 400);
+}
+
+function _waitForNextQuestionRapidFire(previousQuestion) {
+  let attempts = 0;
+  const check = () => {
+    if (!rapidFireActive) return;
+    attempts++;
+    if (attempts > 30) { // 15 seconds timeout
+      Logger.warn("⚡ Rapid Fire: timed out waiting for next question.");
+      stopRapidFire();
+      return;
+    }
+    const mcq = DOMExtractor.extract(document);
+    if (mcq && mcq.question && mcq.question !== previousQuestion) {
+      _rapidFireStep();
+    } else {
+      rapidFireTimer = setTimeout(check, 500);
+    }
+  };
+  rapidFireTimer = setTimeout(check, 500);
+}
+
+Logger.info("[MCQ AI Assistant v2] Sidebar content script loaded. In-page shortcuts active.");
 
 // ── Coding Feature Logic ────────────────────────────────────────────────────
 
 async function runCodingAnalysis() {
-  SidebarUI.open();
-  SidebarUI.showLoading();
+  if (!stealthMode) {
+    SidebarUI.open();
+    SidebarUI.showLoading();
+  } else {
+    _showToastNotification("💻 Solving code…");
+  }
 
   if (!isContextValid()) {
-    SidebarUI.showError("Extension was reloaded.", "Please refresh this page.");
+    if (!stealthMode) SidebarUI.showError("Extension was reloaded.", "Please refresh this page.");
     return;
   }
 
   try {
+    const language = detectProgrammingLanguage();
+    Logger.info(`Detected language: ${language}`);
+
     const problemText = extractCodingProblem();
     if (!problemText || problemText.length < 50) {
-      SidebarUI.showError("Could not detect coding problem.", "Try highlighting the problem text and click Solve Code again.");
+      if (!stealthMode) {
+        SidebarUI.showError("Could not detect coding problem.", "Try highlighting the problem text and click Solve Code again.");
+      } else {
+        _showToastNotification("⚠ No problem detected");
+      }
       return;
     }
 
     const response = await chrome.runtime.sendMessage({
       action: "CALL_GEMINI_CODE",
-      payload: { problemText }
+      payload: { problemText, language }
     });
 
     if (!response?.ok) {
-      SidebarUI.showError("Gemini API Error", response?.error || "Unknown error.");
+      if (!stealthMode) {
+        SidebarUI.showError("Code AI Error", response?.error || "Unknown error.");
+      } else {
+        _showToastNotification(`⚠ Code error`);
+      }
       return;
     }
 
-    SidebarUI.showIdle(); // Reset UI
-    console.log("[MCQ AI] Received Code from Gemini:", response.code);
-    injectCodeToIDE(response.code);
+    Logger.info(`Received ${language} code from Gemini:`, response.code.length + " bytes");
+    await injectCodeToIDE(response.code, language);
 
   } catch (err) {
-    SidebarUI.showError(err.message || "Unexpected error.");
+    if (!stealthMode) {
+      SidebarUI.showError(err.message || "Unexpected error.");
+    } else {
+      _showToastNotification("⚠ Code error");
+      Logger.error("Stealth coding error", err.message);
+    }
   }
+}
+
+/**
+ * Detects the currently selected programming language from the page UI.
+ * Priority: app-language-dropdown → generic <select> → visible text scan → "Java" fallback
+ * @returns {string} Normalized language name (e.g. "Java", "C++", "Python", "MySQL")
+ */
+function detectProgrammingLanguage() {
+  const KNOWN = [
+    "MySQL", "SQL", "C++", "C#", "TypeScript", "JavaScript",
+    "Python 3", "Python", "Kotlin", "Swift", "Scala", "Golang",
+    "Go", "Ruby", "PHP", "Rust", "Java", "C",
+  ];
+
+  // 1. Portal-specific: app-language-dropdown button text
+  const dropBtn = document.querySelector(
+    'app-language-dropdown .mydropdown, app-language-dropdown button, app-language-dropdown .selected-lang'
+  );
+  if (dropBtn) {
+    const txt = dropBtn.textContent.trim();
+    const match = KNOWN.find(l => txt.toLowerCase().includes(l.toLowerCase()));
+    if (match) return match;
+  }
+
+  // 2. Generic <select> whose options contain known language names
+  for (const select of document.querySelectorAll('select')) {
+    const val = select.options[select.selectedIndex]?.text?.trim() || "";
+    const match = KNOWN.find(l => val.toLowerCase().includes(l.toLowerCase()));
+    if (match) return match;
+  }
+
+  // 3. Any visible element explicitly labelled as language selector
+  for (const el of document.querySelectorAll('[class*="lang"], [id*="lang"], [data-lang]')) {
+    const txt = (el.textContent || el.getAttribute('data-lang') || "").trim();
+    const match = KNOWN.find(l => txt.toLowerCase().includes(l.toLowerCase()));
+    if (match) return match;
+  }
+
+  // 4. Scan visible page text near the IDE area for language mentions
+  const editorParent = document.querySelector('.ace_editor, .CodeMirror, [class*="editor"]')?.parentElement;
+  if (editorParent) {
+    const txt = editorParent.textContent || "";
+    const match = KNOWN.find(l => txt.includes(l));
+    if (match) return match;
+  }
+
+  return "Java"; // safe default
 }
 
 function extractCodingProblem() {
   const selection = window.getSelection().toString().trim();
   if (selection) return selection;
-  
+
   // Clone body, remove editor to avoid reading code/boilerplate as problem
   const clonedBody = document.body.cloneNode(true);
   const editors = clonedBody.querySelectorAll('.ace_editor, .editor-container, testtaking-footer');
   editors.forEach(e => e.remove());
-  
+
   return clonedBody.innerText;
 }
 
-function injectCodeToIDE(code) {
-  // 1. Select Java language
+// ─────────────────────────────────────────────────────────────────────────────
+// Humanizer — types code character-by-character like a real person
+// ─────────────────────────────────────────────────────────────────────────────
+
+let humanizerActive = false;
+let humanizerAbort  = null;
+
+function stopHumanizer() {
+  humanizerActive = false;
+  if (humanizerAbort) humanizerAbort();
+}
+
+/**
+ * Injects generated code into the Ace Editor using humanized typing.
+ * Types character-by-character with natural speed variations.
+ * @param {string} code      - Raw code string from AI
+ * @param {string} language  - Language name (e.g. "C++", "Python")
+ */
+async function injectCodeToIDE(code, language = "Java") {
+  // 1. Set correct language in the dropdown (portal may need this before editor accepts code)
   const langDropdown = document.querySelector('app-language-dropdown .mydropdown');
   if (langDropdown) {
     langDropdown.click();
-    setTimeout(() => {
-      // Find the dropdown list and click Java
-      const listItems = document.querySelectorAll('app-language-dropdown span, app-language-dropdown div');
-      for (let item of listItems) {
-        if (item.innerText && item.innerText.toLowerCase().includes('java')) {
-          item.click();
-          break;
-        }
+    await new Promise(r => setTimeout(r, 200));
+    const listItems = document.querySelectorAll('app-language-dropdown span, app-language-dropdown div, app-language-dropdown li');
+    for (const item of listItems) {
+      if (item.innerText && item.innerText.trim().toLowerCase().includes(language.toLowerCase())) {
+        item.click();
+        break;
       }
-    }, 200);
+    }
   }
 
-  // 2. Inject into Ace Editor
-  setTimeout(() => {
-    const aceInput = document.querySelector('textarea.ace_text-input');
-    if (aceInput) {
-      aceInput.focus();
-      // Select all (Ctrl+A) and Delete
-      aceInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'a', ctrlKey: true, bubbles: true }));
-      aceInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'Backspace', bubbles: true }));
-      // Insert new code
-      document.execCommand('insertText', false, code);
-    } else {
-      console.warn("[MCQ AI] Ace editor textarea not found.");
-      alert("Could not find the Ace Editor to paste code.");
+  // 2. Wait for editor to be ready
+  await new Promise(r => setTimeout(r, 600));
+
+  const aceInput = document.querySelector('textarea.ace_text-input');
+  if (!aceInput) {
+    Logger.warn("Ace editor textarea not found.");
+    SidebarUI.showError("Editor not found", "Could not find the Ace Editor on this page.");
+    return;
+  }
+
+  aceInput.focus();
+  // Select all (Ctrl+A) and Delete existing content
+  aceInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'a', ctrlKey: true, bubbles: true }));
+  aceInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'Backspace', bubbles: true }));
+  await new Promise(r => setTimeout(r, 100));
+
+  // Clean code before typing:
+  // 1. Remove markdown code blocks (e.g., ```java ... ```)
+  code = code.replace(/^```[a-z]*\n/i, '').replace(/\n```$/i, '').trim();
+  // 2. Strip leading spaces from each line to rely on IDE auto-indent and prevent double spaces
+  code = code.split('\n').map(line => line.trimStart()).join('\n');
+
+  // 3. Humanized typing — character by character
+  humanizerActive = true;
+  if (!stealthMode) {
+    SidebarUI.open();
+    SidebarUI.showHumanizing(code.length, stopHumanizer);
+  }
+  Logger.info(`⌨️ Humanizer: typing ${code.length} chars of ${language}`);
+
+  for (let i = 0; i < code.length; i++) {
+    if (!humanizerActive) {
+      Logger.info(`⌨️ Humanizer stopped at char ${i}/${code.length}`);
+      break;
     }
-  }, 600);
+
+    const char = code[i];
+    document.execCommand('insertText', false, char);
+
+    // Update progress every 5 chars to avoid UI thrashing
+    if (!stealthMode && (i % 5 === 0 || i === code.length - 1)) {
+      SidebarUI.updateHumanizerProgress(i + 1, code.length);
+    }
+
+    // Variable delay to simulate natural human typing
+    let delay;
+    if (char === '\n') {
+      delay = 80 + Math.random() * 220;   // pause at newlines (thinking)
+    } else if (';{}'.includes(char)) {
+      delay = 40 + Math.random() * 100;   // slight pause at statement ends
+    } else if ('()[]<>'.includes(char)) {
+      delay = 15 + Math.random() * 35;    // fast for brackets
+    } else if (char === ' ') {
+      delay = 10 + Math.random() * 25;    // fast for spaces
+    } else {
+      delay = 20 + Math.random() * 55;    // normal typing ~40-75ms/char
+    }
+
+    await new Promise(r => {
+      const timer = setTimeout(r, delay);
+      humanizerAbort = () => { clearTimeout(timer); r(); };
+    });
+  }
+
+  humanizerActive = false;
+  humanizerAbort  = null;
+
+  Logger.info(`⌨️ Humanizer complete: ${code.length} chars typed`);
+  _showToastNotification(`✓ ${code.length} chars typed (${language})`);
+  SidebarUI.showIdle();
 }

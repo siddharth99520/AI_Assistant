@@ -70,8 +70,13 @@ async function checkOllamaStatus() {
         if (result.models.includes(currentVal)) {
           footerModelSelect.value = currentVal;
         } else {
-          footerModelSelect.value = result.models[0];
-          saveModelConfig(result.models[0]);
+          // Saved model not in list (e.g. gemma3-limited isn't loaded yet) —
+          // show it as-is; don't silently overwrite the user's saved preference.
+          const opt = document.createElement("option");
+          opt.value = currentVal;
+          opt.textContent = currentVal;
+          footerModelSelect.insertBefore(opt, footerModelSelect.firstChild);
+          footerModelSelect.value = currentVal;
         }
       } else {
         const opt = document.createElement("option");

@@ -209,6 +209,213 @@
     #save-toast.ok  { background: rgba(34,197,94,.1); color: #4ade80; border: 1px solid rgba(34,197,94,.2); }
     #save-toast.err { background: rgba(239,68,68,.1); color: #f87171; border: 1px solid rgba(239,68,68,.2); }
     @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+
+    /* ── Logs Modal ── */
+    .modal-overlay {
+      position: fixed; inset: 0;
+      background: rgba(0,0,0,0.7);
+      backdrop-filter: blur(4px);
+      display: none;
+      align-items: center; justify-content: center;
+      z-index: 1000;
+    }
+    .modal-overlay.visible { display: flex; }
+    .logs-modal {
+      background: #1e1b4b;
+      border: 1px solid rgba(139,92,246,0.3);
+      border-radius: 16px;
+      width: 90%; max-width: 800px;
+      height: 80vh;
+      display: flex; flex-direction: column;
+      box-shadow: 0 10px 40px rgba(0,0,0,0.5);
+    }
+    .logs-header {
+      padding: 16px 20px;
+      border-bottom: 1px solid rgba(255,255,255,0.1);
+      display: flex; justify-content: space-between; align-items: center;
+    }
+    .logs-header h2 { font-size: 16px; color: #f1f5f9; margin: 0; }
+    .logs-actions { display: flex; gap: 10px; }
+    .logs-body {
+      flex: 1;
+      padding: 16px;
+      overflow-y: auto;
+      font-family: monospace;
+      font-size: 12px;
+      background: #0f172a;
+    }
+    .log-entry { margin-bottom: 8px; padding-bottom: 8px; border-bottom: 1px solid rgba(255,255,255,0.05); }
+    .log-time { color: #64748b; }
+    .log-level-INFO { color: #4ade80; }
+    .log-level-WARN { color: #fbbf24; }
+    .log-level-ERROR { color: #f87171; }
+    .log-ctx { color: #a78bfa; font-weight: bold; margin: 0 8px; }
+    .log-msg { color: #e2e8f0; }
+    .log-details { display: block; color: #94a3b8; margin-top: 4px; padding-left: 20px; white-space: pre-wrap; }
+
+
+    /* ── Keyboard Shortcuts Card ── */
+    .shortcut-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 0;
+      border-bottom: 1px solid rgba(255,255,255,.04);
+    }
+    .shortcut-row:last-child { border-bottom: none; }
+    .shortcut-info {
+      flex: 1;
+      min-width: 0;
+    }
+    .shortcut-name {
+      font-size: 13px;
+      font-weight: 500;
+      color: #c4b5fd;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .shortcut-desc {
+      font-size: 11px;
+      color: #475569;
+      margin-top: 2px;
+    }
+    .shortcut-badge {
+      font-size: 9px;
+      font-weight: 700;
+      padding: 2px 6px;
+      border-radius: 4px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      flex-shrink: 0;
+    }
+    .shortcut-badge.chrome {
+      background: rgba(124,58,237,.2);
+      color: #a78bfa;
+      border: 1px solid rgba(124,58,237,.3);
+    }
+    .shortcut-badge.page {
+      background: rgba(59,130,246,.15);
+      color: #60a5fa;
+      border: 1px solid rgba(59,130,246,.25);
+    }
+    .shortcut-input {
+      width: 140px;
+      padding: 8px 12px;
+      background: rgba(0,0,0,.4);
+      border: 1px solid rgba(255,255,255,.1);
+      border-radius: 8px;
+      color: #e2e8f0;
+      font-family: 'Inter', monospace;
+      font-size: 12px;
+      font-weight: 600;
+      text-align: center;
+      outline: none;
+      cursor: pointer;
+      transition: all .2s;
+      letter-spacing: 0.3px;
+      flex-shrink: 0;
+    }
+    .shortcut-input:hover {
+      border-color: rgba(139,92,246,.4);
+      background: rgba(0,0,0,.5);
+    }
+    .shortcut-input:focus {
+      border-color: #f59e0b;
+      box-shadow: 0 0 0 3px rgba(245,158,11,.2);
+      animation: pulseRecord 1.5s ease-in-out infinite;
+    }
+    .shortcut-input.readonly {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+    .shortcut-input.readonly:hover {
+      border-color: rgba(255,255,255,.1);
+      background: rgba(0,0,0,.4);
+    }
+    @keyframes pulseRecord {
+      0%, 100% { box-shadow: 0 0 0 3px rgba(245,158,11,.2); }
+      50% { box-shadow: 0 0 0 5px rgba(245,158,11,.35); }
+    }
+    .btn-shortcut-reset {
+      width: 28px; height: 28px;
+      background: rgba(255,255,255,.05);
+      border: 1px solid rgba(255,255,255,.08);
+      border-radius: 6px;
+      color: #475569;
+      font-size: 12px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: all .2s;
+      flex-shrink: 0;
+    }
+    .btn-shortcut-reset:hover {
+      background: rgba(239,68,68,.15);
+      color: #f87171;
+      border-color: rgba(239,68,68,.3);
+    }
+    .shortcut-section-label {
+      font-size: 10px;
+      font-weight: 600;
+      color: #475569;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      padding: 12px 0 6px;
+      border-bottom: 1px solid rgba(255,255,255,.06);
+      margin-bottom: 4px;
+    }
+    .shortcut-section-label:first-child { padding-top: 0; }
+    .shortcut-note {
+      font-size: 11px;
+      color: #334155;
+      line-height: 1.5;
+      padding: 8px 12px;
+      background: rgba(245,158,11,.06);
+      border: 1px solid rgba(245,158,11,.12);
+      border-radius: 8px;
+      margin-bottom: 12px;
+    }
+    .shortcut-note code {
+      background: rgba(255,255,255,.06);
+      border: 1px solid rgba(255,255,255,.08);
+      border-radius: 4px;
+      padding: 1px 5px;
+      font-family: monospace;
+      font-size: 10px;
+      color: #94a3b8;
+    }
+    .shortcut-conflict {
+      font-size: 11px;
+      color: #f87171;
+      padding: 6px 10px;
+      background: rgba(239,68,68,.08);
+      border: 1px solid rgba(239,68,68,.15);
+      border-radius: 6px;
+      margin-top: 8px;
+      display: none;
+    }
+    /* ── RPM warning ── */
+    .rpm-note {
+      font-size: 11px;
+      color: #475569;
+      line-height: 1.5;
+      padding: 8px 12px;
+      background: rgba(251,191,36,.06);
+      border: 1px solid rgba(251,191,36,.18);
+      border-radius: 8px;
+      margin-top: 12px;
+    }
+    .rpm-note strong { color: #fbbf24; }
+    #rpm-warning {
+      font-size: 11px;
+      color: #f59e0b;
+      margin-top: 6px;
+      min-height: 14px;
+      display: none;
+    }
+    #rpm-warning.visible { display: block; }
   </style>
 </head>
 <body>
@@ -219,23 +426,54 @@
       <div class="icon">🤖</div>
       <div>
         <h1>MCQ AI Assistant</h1>
-        <p>Configure your Ollama server and Gemini API settings</p>
+        <p>Configure AI providers, server settings, and behaviour</p>
+      </div>
+    </div>
+
+    <!-- AI Provider Selection -->
+    <div class="card">
+      <div class="card-title">🧠 AI Provider Selection</div>
+
+      <div class="field">
+        <label for="mcq-provider">MCQ Solving <span>— which AI answers your multiple-choice questions</span></label>
+        <select id="mcq-provider">
+          <option value="ollama">🖥️ Ollama (Local)</option>
+          <option value="gemini">☁️ Gemini (Google AI)</option>
+        </select>
+      </div>
+
+      <div class="field">
+        <label for="coding-provider">Code Solving <span>— which AI generates code solutions</span></label>
+        <select id="coding-provider">
+          <option value="gemini">☁️ Gemini (Google AI)</option>
+          <option value="ollama">🖥️ Ollama (Local)</option>
+        </select>
       </div>
     </div>
 
     <!-- Gemini Settings -->
     <div class="card">
-      <div class="card-title">☁️ Gemini API (For Coding)</div>
+      <div class="card-title">☁️ Gemini API</div>
       <div class="field">
-        <label for="gemini-api-key">API Key <span>— Get this from Google AI Studio</span></label>
+        <label for="gemini-api-key">API Key <span>— <a href="https://aistudio.google.com/app/apikey" target="_blank" style="color: #a78bfa; text-decoration: none; border-bottom: 1px dotted #a78bfa;">Get this from Google AI Studio</a> (<a href="https://ai.google.dev/gemini-api/docs" target="_blank" style="color: #a78bfa; text-decoration: none; border-bottom: 1px dotted #a78bfa;">Docs</a>)</span></label>
         <input type="password" id="gemini-api-key" placeholder="AIzaSy..." />
       </div>
       <div class="field">
-        <label for="gemini-model">Model <span>— e.g. gemini-2.5-flash</span></label>
+        <label for="gemini-model">Model <span>— e.g. gemini-2.5-flash-lite</span></label>
         <select id="gemini-model">
-          <option value="gemini-2.5-flash">Gemini 2.5 Flash (Recommended)</option>
-          <option value="gemini-2.0-flash-lite">Gemini 2.0 Flash Lite</option>
+          <option value="gemini-2.5-flash-lite">Gemini 2.5 Flash Lite (Recommended - 30 RPM)</option>
+          <option value="gemini-3.5-flash-lite">Gemini 3.5 Flash Lite (Newest - 30 RPM)</option>
+          <option value="gemini-2.5-flash">Gemini 2.5 Flash</option>
+          <option value="gemini-3.5-flash">Gemini 3.5 Flash</option>
+          <option value="gemini-2.0-flash">Gemini 2.0 Flash</option>
         </select>
+      </div>
+      <div class="rpm-note">
+        ⏱ <strong>Free-tier RPM limits</strong> — Auto-Pilot minimum delays to avoid 429 errors:<br>
+        Flash Lite (2.5/3.5): <strong>2 s</strong> (30 RPM) &nbsp;·&nbsp;
+        2.5 Flash: <strong>6 s</strong> (10 RPM) &nbsp;·&nbsp;
+        3.5 Flash: <strong>4 s</strong> (15 RPM)<br>
+        The extension enforces these automatically when Gemini is your MCQ provider.
       </div>
     </div>
 
@@ -305,6 +543,7 @@
       <div class="field" style="margin-top: -10px; margin-bottom: 20px;">
         <label for="autoclick-delay-input">Auto-Pilot Delay (seconds) <span>— time to wait before clicking Next</span></label>
         <input type="number" id="autoclick-delay-input" min="0" step="0.1" placeholder="1.5" />
+        <div id="rpm-warning">⚠ Gemini MCQ provider active — minimum delay enforced to <span id="rpm-min-val"></span> s to stay within free-tier RPM limit.</div>
       </div>
 
       <div class="field">
@@ -328,6 +567,149 @@
       </div>
     </div>
 
+    <!-- Keyboard Shortcuts -->
+    <div class="card">
+      <div class="card-title">⌨️ Keyboard Shortcuts</div>
+
+      <div class="shortcut-note">
+        💡 Click any <strong>Page</strong> shortcut field and press a new key combo to rebind it.<br>
+        Default MCQ: <code>Ctrl+Shift+M</code> &nbsp;·&nbsp; Default Code: <code>Ctrl+Shift+K</code> &nbsp;·&nbsp; Stealth: <code>Alt+S</code><br>
+        <strong>Chrome</strong> commands (sidebar, auto-pilot) must be changed at <code>chrome://extensions/shortcuts</code>
+      </div>
+
+      <div id="shortcut-conflict" class="shortcut-conflict"></div>
+
+      <!-- Chrome Manifest Commands (read-only) -->
+      <div class="shortcut-section-label">Chrome Commands — change at <code style="font-size:9px">chrome://extensions/shortcuts</code></div>
+
+      <div class="shortcut-row" data-action="toggleSidebar">
+        <div class="shortcut-info">
+          <div class="shortcut-name">Toggle Sidebar <span class="shortcut-badge chrome">Chrome</span></div>
+          <div class="shortcut-desc">Open or close the AI Assistant sidebar</div>
+        </div>
+        <input class="shortcut-input readonly" id="sc-toggleSidebar" value="Ctrl+Shift+S" readonly tabindex="-1" />
+      </div>
+
+      <div class="shortcut-row" data-action="toggleAutoPilot">
+        <div class="shortcut-info">
+          <div class="shortcut-name">Toggle Auto-Pilot <span class="shortcut-badge chrome">Chrome</span></div>
+          <div class="shortcut-desc">Turn Auto-Pilot mode on or off</div>
+        </div>
+        <input class="shortcut-input readonly" id="sc-toggleAutoPilot" value="Ctrl+Shift+X" readonly tabindex="-1" />
+      </div>
+
+      <!-- In-Page Shortcuts (customizable) -->
+      <div class="shortcut-section-label">In-Page Shortcuts (Customizable)</div>
+
+      <div class="shortcut-row" data-action="solveMcq">
+        <div class="shortcut-info">
+          <div class="shortcut-name">Solve MCQ <span class="shortcut-badge page">Page</span></div>
+          <div class="shortcut-desc">Analyse the current question &amp; auto-select answer</div>
+        </div>
+        <input class="shortcut-input" id="sc-solveMcq" value="Ctrl+Shift+M" readonly />
+        <button class="btn-shortcut-reset" data-action="solveMcq" title="Reset to default">↺</button>
+      </div>
+
+      <div class="shortcut-row" data-action="solveCode">
+        <div class="shortcut-info">
+          <div class="shortcut-name">Solve Code <span class="shortcut-badge page">Page</span></div>
+          <div class="shortcut-desc">Solve coding problem with AI</div>
+        </div>
+        <input class="shortcut-input" id="sc-solveCode" value="Ctrl+Shift+K" readonly />
+        <button class="btn-shortcut-reset" data-action="solveCode" title="Reset to default">↺</button>
+      </div>
+
+      <div class="shortcut-row" data-action="nextQuestion">
+        <div class="shortcut-info">
+          <div class="shortcut-name">Next Question <span class="shortcut-badge page">Page</span></div>
+          <div class="shortcut-desc">Click the Next / Skip button on the portal</div>
+        </div>
+        <input class="shortcut-input" id="sc-nextQuestion" value="Ctrl+Shift+N" readonly />
+        <button class="btn-shortcut-reset" data-action="nextQuestion" title="Reset to default">↺</button>
+      </div>
+
+      <div class="shortcut-row" data-action="reAnalyse">
+        <div class="shortcut-info">
+          <div class="shortcut-name">Re-Analyse <span class="shortcut-badge page">Page</span></div>
+          <div class="shortcut-desc">Re-run analysis on the current question</div>
+        </div>
+        <input class="shortcut-input" id="sc-reAnalyse" value="Ctrl+Shift+R" readonly />
+        <button class="btn-shortcut-reset" data-action="reAnalyse" title="Reset to default">↺</button>
+      </div>
+
+      <div class="shortcut-row" data-action="closeSidebar">
+        <div class="shortcut-info">
+          <div class="shortcut-name">Close Sidebar <span class="shortcut-badge page">Page</span></div>
+          <div class="shortcut-desc">Dismiss the sidebar panel</div>
+        </div>
+        <input class="shortcut-input" id="sc-closeSidebar" value="Escape" readonly />
+        <button class="btn-shortcut-reset" data-action="closeSidebar" title="Reset to default">↺</button>
+      </div>
+
+      <div class="shortcut-row" data-action="selectOptionA">
+        <div class="shortcut-info">
+          <div class="shortcut-name">Select Option A <span class="shortcut-badge page">Page</span></div>
+          <div class="shortcut-desc">Force-select option A without AI</div>
+        </div>
+        <input class="shortcut-input" id="sc-selectOptionA" value="Alt+A" readonly />
+        <button class="btn-shortcut-reset" data-action="selectOptionA" title="Reset to default">↺</button>
+      </div>
+
+      <div class="shortcut-row" data-action="selectOptionB">
+        <div class="shortcut-info">
+          <div class="shortcut-name">Select Option B <span class="shortcut-badge page">Page</span></div>
+          <div class="shortcut-desc">Force-select option B without AI</div>
+        </div>
+        <input class="shortcut-input" id="sc-selectOptionB" value="Alt+B" readonly />
+        <button class="btn-shortcut-reset" data-action="selectOptionB" title="Reset to default">↺</button>
+      </div>
+
+      <div class="shortcut-row" data-action="selectOptionC">
+        <div class="shortcut-info">
+          <div class="shortcut-name">Select Option C <span class="shortcut-badge page">Page</span></div>
+          <div class="shortcut-desc">Force-select option C without AI</div>
+        </div>
+        <input class="shortcut-input" id="sc-selectOptionC" value="Alt+C" readonly />
+        <button class="btn-shortcut-reset" data-action="selectOptionC" title="Reset to default">↺</button>
+      </div>
+
+      <div class="shortcut-row" data-action="selectOptionD">
+        <div class="shortcut-info">
+          <div class="shortcut-name">Select Option D <span class="shortcut-badge page">Page</span></div>
+          <div class="shortcut-desc">Force-select option D without AI</div>
+        </div>
+        <input class="shortcut-input" id="sc-selectOptionD" value="Alt+D" readonly />
+        <button class="btn-shortcut-reset" data-action="selectOptionD" title="Reset to default">↺</button>
+      </div>
+
+      <div class="shortcut-row" data-action="openSettings">
+        <div class="shortcut-info">
+          <div class="shortcut-name">Open Settings <span class="shortcut-badge page">Page</span></div>
+          <div class="shortcut-desc">Open the extension options page</div>
+        </div>
+        <input class="shortcut-input" id="sc-openSettings" value="Ctrl+Shift+P" readonly />
+        <button class="btn-shortcut-reset" data-action="openSettings" title="Reset to default">↺</button>
+      </div>
+
+      <div class="shortcut-row" data-action="toggleHighlight">
+        <div class="shortcut-info">
+          <div class="shortcut-name">Toggle Highlight <span class="shortcut-badge page">Page</span></div>
+          <div class="shortcut-desc">Turn answer highlight on/off for this session</div>
+        </div>
+        <input class="shortcut-input" id="sc-toggleHighlight" value="Alt+H" readonly />
+        <button class="btn-shortcut-reset" data-action="toggleHighlight" title="Reset to default">↺</button>
+      </div>
+
+      <div class="shortcut-row" data-action="toggleStealth">
+        <div class="shortcut-info">
+          <div class="shortcut-name">Toggle Stealth 👻 <span class="shortcut-badge page">Page</span></div>
+          <div class="shortcut-desc">Solve silently — no sidebar, just a small toast with the answer</div>
+        </div>
+        <input class="shortcut-input" id="sc-toggleStealth" value="Alt+S" readonly />
+        <button class="btn-shortcut-reset" data-action="toggleStealth" title="Reset to default">↺</button>
+      </div>
+    </div>
+
     <!-- Extraction Strategy Order -->
     <div class="card">
       <div class="card-title">🔍 Extraction Strategy</div>
@@ -346,12 +728,29 @@
     <!-- Actions -->
     <div class="actions">
       <button class="btn-save" id="btn-save">💾 Save Settings</button>
+      <button class="btn-reset" id="btn-view-logs">📄 View Logs</button>
       <button class="btn-reset" id="btn-reset">Reset</button>
     </div>
     <div id="save-toast"></div>
 
   </div>
 
-  <script src="options.js"></script>
+  <!-- Logs Modal -->
+  <div class="modal-overlay" id="logs-modal-overlay">
+    <div class="logs-modal">
+      <div class="logs-header">
+        <h2>System Logs</h2>
+        <div class="logs-actions">
+          <button class="btn-reset" id="btn-clear-logs" style="padding: 6px 12px;">Clear Logs</button>
+          <button class="btn-reset" id="btn-close-logs" style="padding: 6px 12px;">Close</button>
+        </div>
+      </div>
+      <div class="logs-body" id="logs-body">
+        Loading logs...
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="options.js"></script>
 </body>
 </html>

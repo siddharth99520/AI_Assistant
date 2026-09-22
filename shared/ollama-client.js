@@ -3,6 +3,8 @@
  * Handles request construction, timeout, and error normalisation.
  */
 
+import { logger } from "./logger.js";
+
 /**
  * Sends a prompt to Ollama and returns the model's text response.
  *
@@ -28,6 +30,8 @@ export async function askOllama(prompt, cfg) {
         options: {
           temperature: cfg.temperature,
           num_predict: cfg.maxTokens,
+          num_gpu: 28,   // Offload 28/35 layers to GPU; rest stay in RAM (GTX 1650 4GB fix)
+          num_ctx: 512,  // Reduced context: MCQ prompts are ~100 tokens; saves ~1GB KV cache VRAM
         },
       }),
     });
