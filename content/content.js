@@ -1986,19 +1986,63 @@ async function injectCodeToIDE(code, language = "Java") {
   aceInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'Backspace', bubbles: true }));
   await new Promise(r => setTimeout(r, 100));
 
-  // Clean code before typing:
-  // 1. Remove markdown code blocks (e.g., ```java ... ```)
-  code = code.replace(/^```[a-z]*\n/i, '').replace(/\n```$/i, '').trim();
-  // 2. Strip leading spaces from each line to rely on IDE auto-indent and prevent double spaces
-  code = code.split('\n').map(line => line.trimStart()).join('\n');
+  // ── Clean code before typing ───────────────────────────────────────────
+  // 1. Remove markdown code blocks (handles various formats the AI may produce)
+  code = code
+    .replace(/^```[\w\s]*\n/i, '')   // opening fence: ```java, ```python 3, etc.
+    .replace(/\n```\s*$/i, '')        // closing fence at end
+    .replace(/^```[\w\s]*/i, '')      // opening fence without newline
+    .replace(/```\s*$/i, '')          // closing fence without preceding newline
+    .trim();
 
-  // 3. Humanized typing — character by character
+  // 2. Indentation handling — language-aware
+  //    Brace-based languages (Java, C, C++, JS, etc.): strip leading whitespace
+  //    and let Ace's auto-indent handle it. This prevents double-indentation.
+  //    Indentation-based languages (Python, Ruby, etc.): PRESERVE original
+  //    indentation since it's semantically meaningful.
+  const INDENT_LANGUAGES = ['python', 'python 3', 'python3', 'ruby', 'yaml', 'yml', 'coffeescript', 'haskell'];
+  const langLower = language.toLowerCase();
+  const preserveIndent = INDENT_LANGUAGES.some(l => langLower.includes(l));
+
+  if (!preserveIndent) {
+    code = code.split('\n').map(line => line.trimStart()).join('\n');
+  }
+
+  // 3. Remove extra trailing closing brackets/braces that exceed valid pairs
+  code = removeTrailingUnmatchedBrackets(code);
+
+  // 4. Get Ace editor instance to detect auto-close behaviour
+  const aceEditor = getAceEditorInstance();
+  const autoCloseBrackets = aceEditor?.getOption?.('behavioursEnabled') ?? true;
+
+  // Bracket pairs that Ace auto-closes when you type the opening char
+  const AUTO_CLOSE_MAP = { '(': ')', '{': '}', '[': ']', "'": "'", '"': '"', '`': '`' };
+
+  // 4b. For indentation-sensitive languages, DISABLE Ace's auto-indent
+  //     so it doesn't add its own whitespace on top of the preserved indentation.
+  //     We restore the original settings after typing is complete.
+  let savedAceSettings = null;
+  if (preserveIndent && aceEditor) {
+    try {
+      savedAceSettings = {
+        behavioursEnabled: aceEditor.getOption('behavioursEnabled'),
+        enableAutoIndent:  aceEditor.getOption('enableAutoIndent'),
+      };
+      aceEditor.setOption('behavioursEnabled', false);
+      aceEditor.setOption('enableAutoIndent', false);
+      Logger.info('⌨️ Humanizer: disabled Ace auto-indent for ' + language);
+    } catch (_) {}
+  }
+
+  // 5. Humanized typing — character by character
   humanizerActive = true;
   if (!stealthMode) {
     SidebarUI.open();
     SidebarUI.showHumanizing(code.length, stopHumanizer);
   }
-  Logger.info(`⌨️ Humanizer: typing ${code.length} chars of ${language}`);
+  Logger.info(`⌨️ Humanizer: typing ${code.length} chars of ${language} (preserveIndent=${preserveIndent})`);
+
+  let skipNext = false; // flag to skip an auto-closed character
 
   for (let i = 0; i < code.length; i++) {
     if (!humanizerActive) {
@@ -2007,7 +2051,31 @@ async function injectCodeToIDE(code, language = "Java") {
     }
 
     const char = code[i];
+
+    // If the previous character triggered auto-close in Ace, and the current
+    // character matches the auto-closed closer, skip it to avoid duplicates.
+    if (skipNext) {
+      skipNext = false;
+      // Verify the editor actually inserted the closer by checking cursor context
+      if (autoCloseBrackets) {
+        const cursorChar = getCharAfterCursor(aceEditor);
+        if (cursorChar === char) {
+          // Ace already inserted this closer — move cursor right instead of inserting
+          aceInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
+          if (!stealthMode && (i % 5 === 0 || i === code.length - 1)) {
+            SidebarUI.updateHumanizerProgress(i + 1, code.length);
+          }
+          continue;
+        }
+      }
+    }
+
     document.execCommand('insertText', false, char);
+
+    // Check if this char triggers auto-close, so we can skip its pair next
+    if (autoCloseBrackets && AUTO_CLOSE_MAP[char] && i + 1 < code.length && code[i + 1] === AUTO_CLOSE_MAP[char]) {
+      skipNext = true;
+    }
 
     // Update progress every 5 chars to avoid UI thrashing
     if (!stealthMode && (i % 5 === 0 || i === code.length - 1)) {
@@ -2037,7 +2105,94 @@ async function injectCodeToIDE(code, language = "Java") {
   humanizerActive = false;
   humanizerAbort  = null;
 
+  // Restore Ace editor settings if we disabled auto-indent
+  if (savedAceSettings && aceEditor) {
+    try {
+      aceEditor.setOption('behavioursEnabled', savedAceSettings.behavioursEnabled);
+      aceEditor.setOption('enableAutoIndent', savedAceSettings.enableAutoIndent);
+      Logger.info('⌨️ Humanizer: restored Ace auto-indent settings');
+    } catch (_) {}
+  }
+
   Logger.info(`⌨️ Humanizer complete: ${code.length} chars typed`);
   _showToastNotification(`✓ ${code.length} chars typed (${language})`);
   SidebarUI.showIdle();
 }
+
+/**
+ * Removes unmatched trailing closing brackets/braces/parens from code.
+ * Walks the string counting open/close pairs; if any closer at the end
+ * has no matching opener, it gets removed.
+ */
+function removeTrailingUnmatchedBrackets(code) {
+  const PAIRS = { '(': ')', '{': '}', '[': ']' };
+  const OPENERS = new Set(Object.keys(PAIRS));
+  const CLOSERS = new Map(Object.entries(PAIRS).map(([o, c]) => [c, o]));
+
+  // Count balance
+  const stack = [];
+  for (const ch of code) {
+    if (OPENERS.has(ch)) {
+      stack.push(ch);
+    } else if (CLOSERS.has(ch)) {
+      if (stack.length > 0 && stack[stack.length - 1] === CLOSERS.get(ch)) {
+        stack.pop();
+      }
+      // else: unmatched closer (we'll handle trailing ones below)
+    }
+  }
+
+  // Trim unmatched closing brackets from the end of the code
+  let trimmed = code.trimEnd();
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const closer of CLOSERS.keys()) {
+      if (trimmed.endsWith(closer)) {
+        // Check if removing it fixes the balance
+        const countOpen  = (trimmed.match(new RegExp('\\' + CLOSERS.get(closer), 'g')) || []).length;
+        const countClose = (trimmed.match(new RegExp('\\' + closer, 'g')) || []).length;
+        if (countClose > countOpen) {
+          trimmed = trimmed.slice(0, -1).trimEnd();
+          changed = true;
+        }
+      }
+    }
+  }
+
+  return trimmed;
+}
+
+/**
+ * Tries to get the Ace Editor instance from the page.
+ * @returns {object|null} Ace editor instance or null
+ */
+function getAceEditorInstance() {
+  try {
+    const editorEl = document.querySelector('.ace_editor');
+    if (editorEl && window.ace) {
+      return window.ace.edit(editorEl);
+    }
+    // Fallback: check if the editor is attached to the DOM element
+    if (editorEl?.env?.editor) return editorEl.env.editor;
+  } catch (_) {}
+  return null;
+}
+
+/**
+ * Gets the character immediately after the cursor in the Ace editor.
+ * Used to detect if Ace auto-inserted a closing bracket.
+ * @param {object} aceEditor - Ace editor instance
+ * @returns {string|null}
+ */
+function getCharAfterCursor(aceEditor) {
+  try {
+    if (!aceEditor) return null;
+    const pos = aceEditor.getCursorPosition();
+    const line = aceEditor.session.getLine(pos.row);
+    return line[pos.column] || null;
+  } catch (_) {
+    return null;
+  }
+}
+

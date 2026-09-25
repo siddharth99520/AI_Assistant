@@ -201,7 +201,7 @@ async function handleSolveMCQ(mcq, sendResponse) {
       logger.info("SW", "Ollama raw response:", rawResponse);
     }
 
-    const answerIndex  = parseAnswerIndex(rawResponse, mcq.options.length);
+    const answerIndex  = parseAnswerIndex(rawResponse, mcq.options.length, mcq.options);
     const answerLetter = answerIndex !== null ? indexToLetter(answerIndex) : "?";
 
     if (answerIndex === null) {

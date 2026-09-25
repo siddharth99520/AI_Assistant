@@ -39,7 +39,10 @@ ${optionLines}
 Instructions:
 - Read all options carefully.
 - Choose the single best answer.
-- Reply with ONLY the option letter (e.g. A, B, C, or D). No explanation, no punctuation, nothing else.
+- Reply with ONLY the option letter (A, B, C, or D). No explanation, no punctuation, nothing else.
+- IMPORTANT: Do NOT reply with the option text itself. Reply with ONLY the letter.
+  Correct example: B
+  Wrong example: TCP/IP
 
 Answer:`;
 }
@@ -47,19 +50,58 @@ Answer:`;
 /**
  * Parses the raw LLM output and maps it back to a zero-based option index.
  *
- * @param {string} rawResponse   - e.g. "B", "b.", "  C  "
- * @param {number} totalOptions  - Number of available options
- * @returns {number|null}        - Zero-based index, or null if unparseable
+ * Attempts three strategies in order:
+ *  1. Letter match  — "B", "b.", "  C  "  → index from letter
+ *  2. Exact text match — "TCP/IP" matches option[0] === "TCP/IP"
+ *  3. Substring match  — "The answer is TCP/IP" contains option[0]
+ *
+ * @param {string}   rawResponse  - e.g. "B", "b.", "  C  ", or "TCP/IP"
+ * @param {number}   totalOptions - Number of available options
+ * @param {string[]} [options=[]] - The actual option texts for fuzzy fallback
+ * @returns {number|null}         - Zero-based index, or null if unparseable
  */
-export function parseAnswerIndex(rawResponse, totalOptions) {
+export function parseAnswerIndex(rawResponse, totalOptions, options = []) {
   if (!rawResponse) return null;
 
-  // Extract first alphabetic character
-  const match = rawResponse.trim().match(/^([A-Za-z])/);
-  if (!match) return null;
+  const cleaned = rawResponse.trim();
 
-  const idx = match[1].toUpperCase().charCodeAt(0) - "A".charCodeAt(0);
-  return idx >= 0 && idx < totalOptions ? idx : null;
+  // ── Strategy 1: Letter match (fast path) ──────────────────────────────
+  const letterMatch = cleaned.match(/^([A-Za-z])[\.\)\:\s]?$/)
+                   || cleaned.match(/^(?:answer|option)?[\s:\-]*([A-Za-z])[\.\)\s]*$/i)
+                   || cleaned.match(/^([A-Za-z])/);
+  if (letterMatch) {
+    const idx = letterMatch[1].toUpperCase().charCodeAt(0) - "A".charCodeAt(0);
+    if (idx >= 0 && idx < totalOptions) return idx;
+  }
+
+  // ── Strategy 2 & 3: Text matching (fallback for non-letter responses) ─
+  if (options.length > 0) {
+    const norm = (s) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
+    const responseLower = cleaned.toLowerCase();
+    const responseNorm  = norm(cleaned);
+
+    // 2a. Exact match (normalized) — response IS one of the options
+    for (let i = 0; i < options.length; i++) {
+      if (norm(options[i]) === responseNorm) return i;
+    }
+
+    // 2b. Response contains an option text (or vice-versa)
+    //     Score by longest match to avoid false positives on short options
+    let bestIdx = -1, bestLen = 0;
+    for (let i = 0; i < options.length; i++) {
+      const optLower = options[i].toLowerCase().trim();
+      if (optLower.length < 2) continue; // skip trivially short options
+      if (responseLower.includes(optLower) || optLower.includes(responseLower)) {
+        if (optLower.length > bestLen) {
+          bestLen = optLower.length;
+          bestIdx = i;
+        }
+      }
+    }
+    if (bestIdx >= 0) return bestIdx;
+  }
+
+  return null;
 }
 
 // ---------------------------------------------------------------------------
