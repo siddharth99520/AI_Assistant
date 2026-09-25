@@ -43,7 +43,7 @@ const DOMExtractor = (() => {
   ];
 
   function extract(root = document) {
-    return (
+    const result = (
       tryDataAttributes(root)    ||
       tryAriaLabels(root)        ||
       trySemanticHTML(root)      ||
@@ -51,6 +51,15 @@ const DOMExtractor = (() => {
       tryGenericHeuristics(root) ||
       null
     );
+
+    if (result && result.options) {
+      // Reject false positives like question palettes/grids
+      const numCount = result.options.filter(o => /^\s*\d+\s*$/.test(o)).length;
+      if (result.options.length > 12 || (result.options.length > 5 && numCount === result.options.length)) {
+        return null; 
+      }
+    }
+    return result;
   }
 
   function tryDataAttributes(root) {
@@ -252,10 +261,10 @@ const DOMExtractor = (() => {
 // Auto-Selector — inline IIFE
 // ─────────────────────────────────────────────────────────────────────────────
 const AutoSelector = (() => {
-  function select(answerIndex, cfg, root = document) {
+  function select(answerIndex, cfg, expectedCount = 0, root = document) {
     const handlers = [tryNativeInput, tryAriaRadio, tryDataOption, tryClassOption, tryLabel, tryListItem];
     for (const h of handlers) {
-      const r = h(answerIndex, root);
+      const r = h(answerIndex, root, expectedCount);
       if (r.success) {
         if (cfg.highlightCorrectOption) applyHighlight(r.element, cfg.highlightColor || "#22c55e");
         return { ...r, method: h.name };
@@ -296,9 +305,12 @@ const AutoSelector = (() => {
     items[idx].click();
     return { success: true, element: items[idx] };
   }
-  function tryClassOption(idx, root) {
+  function tryClassOption(idx, root, expectedCount) {
     for (const cls of ["option","choice","answer","answer-option","q-option","quiz-option","mcq-option","option-item"]) {
       const items = root.querySelectorAll(`.${cls},[class*="${cls}"]`);
+      if (items.length === 0) continue;
+      // Prevent clicking question palettes (25+ items) if we only expect a few options
+      if (expectedCount > 0 && items.length > expectedCount + 4) continue;
       if (items[idx]) { items[idx].click(); return { success: true, element: items[idx] }; }
     }
     return { success: false, element: null };
@@ -313,12 +325,17 @@ const AutoSelector = (() => {
     return { success: true, element: target };
   }
   function tryListItem(idx, root) {
-    const list = root.querySelector("ol,ul");
-    if (!list) return { success: false, element: null };
-    const items = list.querySelectorAll("li");
-    if (!items[idx]) return { success: false, element: null };
-    items[idx].click();
-    return { success: true, element: items[idx] };
+    const lists = root.querySelectorAll("ol,ul");
+    for (const list of lists) {
+      const items = list.querySelectorAll("li");
+      if (items.length >= 2 && items.length <= 8) {
+        if (items[idx]) {
+          items[idx].click();
+          return { success: true, element: items[idx] };
+        }
+      }
+    }
+    return { success: false, element: null };
   }
 
   function applyHighlight(el, color) {
@@ -342,23 +359,40 @@ const AutoSelector = (() => {
   }
 
   function clickNextButton(root) {
-    const nextWords = ["next", "continue", "submit & next", "next question", ">", "→"];
-    
-    // 1. Check standard semantic buttons
+    // Primary patterns: multi-word phrases that reliably identify the real "Next" button
+    const primaryPatterns = [
+      "next", "continue", "submit & next", "submit and next",
+      "save & next", "save and next", "next question",
+      "submit & continue", "save & continue",
+    ];
+    // Arrow-only buttons are deprioritized — they often match pagination/palette arrows
+    const arrowPatterns = [">", "→", "»", "▶"];
+
+    // 1. Check standard semantic buttons — prefer primary patterns first
     const buttons = root.querySelectorAll("button, a, input[type='button'], input[type='submit'], [role='button']");
+    let arrowFallback = null;
+
     for (const btn of buttons) {
       const rect = btn.getBoundingClientRect();
       if (rect.width === 0 || rect.height === 0) continue;
-      
-      const text = (btn.innerText || btn.value || "").trim().toLowerCase();
+
+      const rawText = (btn.innerText || btn.value || "").trim();
+      const text = rawText.toLowerCase();
       const ariaLabel = (btn.getAttribute("aria-label") || "").trim().toLowerCase();
-      
-      if (nextWords.includes(text) || nextWords.includes(ariaLabel)) {
+
+      // Check primary patterns with substring matching (handles "  Save & Next  " etc.)
+      const matchesPrimary = primaryPatterns.some(p => text.includes(p) || ariaLabel.includes(p));
+      if (matchesPrimary) {
         triggerClick(btn);
         return true;
       }
+
+      // Remember arrow-only buttons as fallback (only if text is very short — likely an icon btn)
+      if (!arrowFallback && rawText.length <= 3 && arrowPatterns.some(a => rawText.includes(a))) {
+        arrowFallback = btn;
+      }
     }
-    
+
     // 2. Check non-semantic elements (divs/spans) used as buttons by looking for specific class names
     const classBtns = root.querySelectorAll(".next-btn, .btn-next, .next_btn, .btn--next");
     for (const btn of classBtns) {
@@ -366,7 +400,13 @@ const AutoSelector = (() => {
       triggerClick(btn);
       return true;
     }
-    
+
+    // 3. Fall back to arrow button only if nothing else worked
+    if (arrowFallback) {
+      triggerClick(arrowFallback);
+      return true;
+    }
+
     Logger.info("Could not find a visible 'Next' button to click.");
     return false;
   }
@@ -1577,7 +1617,7 @@ async function runAnalysis(sendResponse) {
     }
     // In stealth mode, suppress highlight glow so nothing visually stands out
     if (stealthMode) cfg.highlightCorrectOption = false;
-    AutoSelector.select(answerIndex, cfg, document);
+    AutoSelector.select(answerIndex, cfg, mcq.options.length, document);
 
     Logger.info(`Config loaded. autoClickNext is: ${cfg.autoClickNext}`);
 
@@ -1634,6 +1674,7 @@ async function runAnalysis(sendResponse) {
 let rapidFireActive = false;
 let rapidFireCount  = 0;
 let rapidFireTimer  = null;
+let rapidFireSpeed  = 400;   // ms delay between select → Next (loaded from config)
 
 function toggleRapidFire() {
   if (rapidFireActive) {
@@ -1643,10 +1684,20 @@ function toggleRapidFire() {
   }
 }
 
-function startRapidFire() {
+async function startRapidFire() {
   rapidFireActive = true;
   rapidFireCount  = 0;
-  Logger.info("⚡ Rapid Fire started");
+  rapidFireNoMcqRetries = 0;
+
+  // Load speed from saved config
+  try {
+    const cfg = await new Promise(resolve => {
+      chrome.runtime.sendMessage({ action: "GET_CONFIG" }, resolve);
+    });
+    if (cfg && cfg.rapidFireSpeed) rapidFireSpeed = cfg.rapidFireSpeed;
+  } catch (_) { /* keep default */ }
+
+  Logger.info(`⚡ Rapid Fire started (speed: ${rapidFireSpeed}ms)`);
   _showToastNotification("⚡ Rapid Fire ON");
   SidebarUI.open();
   SidebarUI.showRapidFire(0, stopRapidFire);
@@ -1664,28 +1715,57 @@ function stopRapidFire() {
   SidebarUI.showIdle();
 }
 
+let rapidFireNoMcqRetries = 0;   // tracks consecutive no-option extraction attempts
+
 function _rapidFireStep() {
   if (!rapidFireActive) return;
 
   // 1. Extract MCQ to find how many options exist
   const mcq = DOMExtractor.extract(document);
   if (!mcq || !mcq.options || mcq.options.length < 2) {
-    // No question found — wait a bit and try again (page might be loading)
-    rapidFireTimer = setTimeout(() => _rapidFireStep(), 600);
+    rapidFireNoMcqRetries++;
+    if (rapidFireNoMcqRetries < 4) {
+      // Page might still be loading — retry a few times
+      _setRapidFireTimer(() => _rapidFireStep(), 600);
+      return;
+    }
+    // Not an MCQ (fill-in-the-blank, essay, etc.) — skip to next question
+    Logger.info("⚡ Rapid Fire: no selectable options found, skipping question.");
+    rapidFireNoMcqRetries = 0;
+    const currentQ = mcq?.question || null;
+    const clicked = AutoSelector.clickNextButton(document);
+    if (!clicked) {
+      Logger.warn("⚡ Rapid Fire: no Next button found on non-MCQ question, stopping.");
+      stopRapidFire();
+      return;
+    }
+    _waitForNextQuestionRapidFire(currentQ);
     return;
   }
+
+  rapidFireNoMcqRetries = 0;  // reset on successful extraction
 
   // 2. Pick a random option
   const randomIdx = Math.floor(Math.random() * mcq.options.length);
   const cfg = { highlightCorrectOption: false };
-  AutoSelector.select(randomIdx, cfg, document);
+  
+  const selectResult = AutoSelector.select(randomIdx, cfg, mcq.options.length, document);
+  // If it couldn't find a valid option to click (e.g. false positive options), skip
+  if (!selectResult.success) {
+    Logger.info("⚡ Rapid Fire: false positive options, skipping question.");
+    const currentQ = mcq?.question || null;
+    const clicked = AutoSelector.clickNextButton(document);
+    if (!clicked) { stopRapidFire(); return; }
+    _waitForNextQuestionRapidFire(currentQ);
+    return;
+  }
   rapidFireCount++;
   SidebarUI.updateRapidFireCount(rapidFireCount);
   const letter = String.fromCharCode(65 + randomIdx);
   Logger.info(`⚡ Rapid Fire #${rapidFireCount}: selected ${letter}`);
 
   // 3. Click Next after a short delay, then wait for new question
-  rapidFireTimer = setTimeout(() => {
+  _setRapidFireTimer(() => {
     if (!rapidFireActive) return;
     const clicked = AutoSelector.clickNextButton(document);
     if (!clicked) {
@@ -1695,11 +1775,18 @@ function _rapidFireStep() {
     }
     // 4. Wait for next question to load, then repeat
     _waitForNextQuestionRapidFire(mcq.question);
-  }, 400);
+  }, rapidFireSpeed);
 }
 
+/**
+ * Waits for the next question to appear in the DOM, using stabilization:
+ *  - The extracted question must differ from previousQuestion
+ *  - The new question must appear identical in TWO consecutive checks
+ *    (prevents acting during mid-transition DOM states)
+ */
 function _waitForNextQuestionRapidFire(previousQuestion) {
   let attempts = 0;
+  let lastSeenQuestion = null;  // For stabilization — must see the same new question twice
   const check = () => {
     if (!rapidFireActive) return;
     attempts++;
@@ -1710,12 +1797,27 @@ function _waitForNextQuestionRapidFire(previousQuestion) {
     }
     const mcq = DOMExtractor.extract(document);
     if (mcq && mcq.question && mcq.question !== previousQuestion) {
-      _rapidFireStep();
+      // Stabilization: we saw a new question. Is it the same as last check?
+      if (lastSeenQuestion === mcq.question) {
+        // DOM has settled — proceed
+        _rapidFireStep();
+      } else {
+        // First time seeing this question — record it and re-check after a short pause
+        lastSeenQuestion = mcq.question;
+        _setRapidFireTimer(check, 300);
+      }
     } else {
-      rapidFireTimer = setTimeout(check, 500);
+      lastSeenQuestion = null;
+      _setRapidFireTimer(check, 500);
     }
   };
-  rapidFireTimer = setTimeout(check, 500);
+  _setRapidFireTimer(check, 500);
+}
+
+/** Safely sets the rapid-fire timer, clearing any previous one first. */
+function _setRapidFireTimer(callback, delayMs) {
+  if (rapidFireTimer) clearTimeout(rapidFireTimer);
+  rapidFireTimer = setTimeout(callback, delayMs);
 }
 
 Logger.info("[MCQ AI Assistant v2] Sidebar content script loaded. In-page shortcuts active.");

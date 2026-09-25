@@ -52,6 +52,8 @@ const DEFAULT_CONFIG = {
   aiProvider:              "ollama",           // legacy fallback
   mcqProvider:             "ollama",           // "ollama" | "gemini" — MCQ solving
   codingProvider:          "gemini",           // "ollama" | "gemini" — code solving
+  geminiApiKey:            "",                 // Must be listed so chrome.storage.sync.get retrieves it
+  geminiModel:             "gemini-3.5-flash-lite", // Must be listed so chrome.storage.sync.get retrieves it
   ollamaBaseUrl:           "http://localhost:11434",
   ollamaModel:             "gemma3-limited",  // Custom model with num_gpu:28 (GTX 1650 fix)
   requestTimeoutMs:        120000,            // 2 min — allows cold-start model load
@@ -62,6 +64,7 @@ const DEFAULT_CONFIG = {
   autoCloseFloatingPanel:  true,
   autoClickNext:           false,
   autoClickDelay:          1500,
+  rapidFireSpeed:          400,
   primaryStrategy:         "classNameHeuristics",
   shortcuts:               { ...DEFAULT_SHORTCUTS },
 };
@@ -85,6 +88,8 @@ const fields = {
   autocloseToggle:  $("autoclose-toggle"),
   autoclickNextToggle: $("autoclick-next-toggle"),
   autoclickDelayInput: $("autoclick-delay-input"),
+  rapidFireSpeed:   $("rapid-fire-speed"),
+  rapidFireSpeedVal: $("rapid-fire-speed-val"),
   strategySelect:   $("strategy-select"),
 };
 
@@ -118,7 +123,7 @@ function populateForm(cfg) {
   if (fields.mcqProvider)    fields.mcqProvider.value    = cfg.mcqProvider    || "ollama";
   if (fields.codingProvider) fields.codingProvider.value = cfg.codingProvider || "gemini";
   if (fields.geminiApiKey) fields.geminiApiKey.value = cfg.geminiApiKey || "";
-  if (fields.geminiModel) fields.geminiModel.value = cfg.geminiModel || "gemini-2.5-flash";
+  if (fields.geminiModel) fields.geminiModel.value = cfg.geminiModel || "gemini-3.5-flash-lite";
   fields.ollamaUrl.value       = cfg.ollamaBaseUrl;
   fields.ollamaModel.value     = cfg.ollamaModel;
   fields.reqTimeout.value      = cfg.requestTimeoutMs;
@@ -131,6 +136,10 @@ function populateForm(cfg) {
   if (fields.autoclickNextToggle) fields.autoclickNextToggle.checked = !!cfg.autoClickNext;
   if (fields.autoclickDelayInput) fields.autoclickDelayInput.value = (cfg.autoClickDelay || 1500) / 1000;
   fields.strategySelect.value  = cfg.primaryStrategy || "classNameHeuristics";
+  if (fields.rapidFireSpeed) {
+    fields.rapidFireSpeed.value = cfg.rapidFireSpeed || 400;
+    if (fields.rapidFireSpeedVal) fields.rapidFireSpeedVal.textContent = `${fields.rapidFireSpeed.value}ms`;
+  }
 
   // Populate shortcut inputs
   const shortcuts = { ...DEFAULT_SHORTCUTS, ...(cfg.shortcuts || {}) };
@@ -156,6 +165,13 @@ function bindEvents() {
       fields.highlightColor.value = fields.highlightHex.value;
     }
   });
+
+  // Rapid Fire Speed slider — live label update
+  if (fields.rapidFireSpeed && fields.rapidFireSpeedVal) {
+    fields.rapidFireSpeed.addEventListener("input", () => {
+      fields.rapidFireSpeedVal.textContent = `${fields.rapidFireSpeed.value}ms`;
+    });
+  }
 
   // RPM warning: update whenever MCQ provider or Gemini model changes
   if (fields.mcqProvider) fields.mcqProvider.addEventListener("change", updateRpmWarning);
@@ -366,7 +382,7 @@ async function saveSettings() {
     mcqProvider:            fields.mcqProvider    ? fields.mcqProvider.value    : DEFAULT_CONFIG.mcqProvider,
     codingProvider:         fields.codingProvider ? fields.codingProvider.value : DEFAULT_CONFIG.codingProvider,
     geminiApiKey:           fields.geminiApiKey ? fields.geminiApiKey.value.trim() : "",
-    geminiModel:            fields.geminiModel ? fields.geminiModel.value : "gemini-2.5-flash",
+    geminiModel:            fields.geminiModel ? fields.geminiModel.value : "gemini-3.5-flash-lite",
     ollamaBaseUrl:          fields.ollamaUrl.value.trim()   || DEFAULT_CONFIG.ollamaBaseUrl,
     ollamaModel:            fields.ollamaModel.value.trim() || DEFAULT_CONFIG.ollamaModel,
     requestTimeoutMs:       Number(fields.reqTimeout.value) || DEFAULT_CONFIG.requestTimeoutMs,
@@ -377,6 +393,7 @@ async function saveSettings() {
     autoCloseFloatingPanel: fields.autocloseToggle.checked,
     autoClickNext:          fields.autoclickNextToggle ? fields.autoclickNextToggle.checked : false,
     autoClickDelay:         fields.autoclickDelayInput ? Math.round(parseFloat(fields.autoclickDelayInput.value) * 1000) : 1500,
+    rapidFireSpeed:         fields.rapidFireSpeed ? Number(fields.rapidFireSpeed.value) : 400,
     primaryStrategy:        fields.strategySelect.value,
     shortcuts:              collectShortcuts(),
   };

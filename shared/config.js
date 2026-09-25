@@ -55,6 +55,9 @@ export const DEFAULT_CONFIG = {
   highlightColor: "#22c55e",   // Tailwind green-500
   errorColor: "#ef4444",
 
+  // Rapid Fire
+  rapidFireSpeed: 400,           // ms delay between select → Next click (lower = faster)
+
   // Keyboard Shortcuts
   // First 4 are Chrome manifest commands (fullscreen-safe, change via chrome://extensions/shortcuts)
   // Remaining are in-page shortcuts (fully customizable from settings)

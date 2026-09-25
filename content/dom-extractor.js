@@ -46,6 +46,20 @@ export function extractMCQ(strategyOrder, root = document) {
   return null;
 }
 
+// Wrap extract to reject false positives (like question palettes)
+const originalExtractMCQ = extractMCQ;
+export function extractMCQWithValidation(strategyOrder, root = document) {
+  const result = originalExtractMCQ(strategyOrder, root);
+  if (result && result.options) {
+    const numCount = result.options.filter(o => /^\s*\d+\s*$/.test(o)).length;
+    if (result.options.length > 12 || (result.options.length > 5 && numCount === result.options.length)) {
+      console.warn("[MCQ Extractor] Rejected false positive (likely question palette/grid).");
+      return null;
+    }
+  }
+  return result;
+}
+
 // ---------------------------------------------------------------------------
 // Validation helper
 // ---------------------------------------------------------------------------

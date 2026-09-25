@@ -565,6 +565,17 @@
           <div class="thumb"></div>
         </label>
       </div>
+
+      <div class="field" style="margin-top: 6px;">
+        <label for="rapid-fire-speed">⚡ Rapid Fire Speed <span>— delay between each question (lower = faster)</span></label>
+        <div style="display: flex; align-items: center; gap: 12px;">
+          <span style="font-size: 11px; color: #64748b; white-space: nowrap;">Fast</span>
+          <input type="range" id="rapid-fire-speed" min="100" max="1500" step="50" value="400"
+            style="flex: 1; accent-color: #fbbf24; cursor: pointer;" />
+          <span style="font-size: 11px; color: #64748b; white-space: nowrap;">Slow</span>
+          <span id="rapid-fire-speed-val" style="min-width: 50px; font-size: 12px; font-weight: 600; color: #fbbf24; text-align: right;">400ms</span>
+        </div>
+      </div>
     </div>
 
     <!-- Keyboard Shortcuts -->
